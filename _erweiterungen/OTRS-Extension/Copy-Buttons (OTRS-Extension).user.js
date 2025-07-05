@@ -1,12 +1,14 @@
 // ==UserScript==
 // @name         Copy-Buttons (OTRS-Extension)
-// @namespace    http://tampermonkey.net/
-// @version      0.05
+// @namespace    https://github.com/zentolik
+// @version      0.06
 // @description  Funktioniert nur mit Copy-Buttons Version 0.82 oder neuer!
 // @author       Kaan Korkmaz
 // @match        https://otrs.euroweb.net/index.pl?Action=AgentTicketEmail*
 // @match        https://ipsi.securewebsystems.net/project/detailed/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=otrs.euroweb.net
+// @updateURL    https://github.com/zentolik/ipsi-buttons/raw/main/_erweiterungen/OTRS-Extension/Copy-Buttons%20(OTRS-Extension).user.js
+// @downloadURL  https://github.com/zentolik/ipsi-buttons/raw/main/_erweiterungen/OTRS-Extension/Copy-Buttons%20(OTRS-Extension).user.js
 // @grant        none
 // ==/UserScript==
 

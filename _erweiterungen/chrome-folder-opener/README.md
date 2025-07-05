@@ -1,18 +1,18 @@
-00. Ladet den Ordner "chrome-folder-opener" herunter und verschiebt ihn an einen festen Speicherort eurer Wahl (zB. in euren Benutzerordner oder Dokumente).
+0. Ladet den Ordner "chrome-folder-opener" herunter und verschiebt ihn an einen festen Speicherort eurer Wahl (zB. in euren Benutzerordner oder Dokumente).
     Achtung: Nach Abschluss der Einrichtung darf der Ordner nicht mehr verschoben oder umbenannt werden, da sonst die Verknüpfungen nicht mehr funktionieren, da die pfade abosult sind.
 
 Chrome:
-01. Öffne Chrome.
-02. Gib in die Adresszeile "chrome://extensions/" ein (oder öffne deine Erweiterungsübersicht).
-03. Aktiviere oben rechts den Entwicklermodus.
-04. Klicke oben links auf "Entpackte Erweiterung laden".
-05. Wähle den Ordner "extension", innerhalb des Ordners "chrome-folder-opener", aus.
-06. Kopiere die Erweiterungs-ID der "Copy-Buttons (Folder-Extension)" aus der Übersicht.
+1. Öffne Chrome.
+2. Gib in die Adresszeile "chrome://extensions/" ein (oder öffne deine Erweiterungsübersicht).
+3. Aktiviere oben rechts den Entwicklermodus.
+4. Klicke oben links auf "Entpackte Erweiterung laden".
+5. Wähle den Ordner "extension", innerhalb des Ordners "chrome-folder-opener", aus.
+6. Kopiere die Erweiterungs-ID der "Copy-Buttons (Folder-Extension)" aus der Übersicht.
 
 Visual Studio Code:
-07. Öffne den Ordner "chrome-folder-opener" als neues Projekt in Visual Studio Code.
-08. Öffne die Datei "folder_opener.json".
-09. Ersetze den Platzhalter <DEINE_EXTENSION_ID> mit der kopierten Erweiterungs-ID.
+7. Öffne den Ordner "chrome-folder-opener" als neues Projekt in Visual Studio Code.
+8. Öffne die Datei "folder_opener.json".
+9. Ersetze den Platzhalter <DEINE_EXTENSION_ID> mit der kopierten Erweiterungs-ID.
     Beispiel:
         "chrome-extension://superkickerfullnicediggalul/"
 

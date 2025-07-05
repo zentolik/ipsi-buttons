@@ -14,7 +14,7 @@ Ein Button, der beim klicken den Pfad zum DFS-Ordner kopiert.
 
 ----
 
-## Anleitung zum Aktivieren automatischer Updates:
+## Anleitung zum Aktivieren automatischer Updates (ab v0.88):
 1. Klicke oben rechts in der Erweiterungsleiste auf **„Tampermonkey“**. 
 2. Wähle das Skript **„Copy-Buttons“** oder **„Copy-Buttons (OTRS-Extension)“** aus – je nachdem, welches du aktualisieren möchtest.
 3. Navigiere zum Tab **„Einstellungen“**.

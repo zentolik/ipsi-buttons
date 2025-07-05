@@ -1,7 +1,7 @@
 # project-wwwe
 Ein Button, der beim klicken den Pfad zum DFS-Ordner kopiert.
 
-## Q&A Copy-Buttons Installieren:
+## Copy-Buttons Installieren:
 
 1. Lade die aktuellste "**Copy-Buttons-X.X.user.js**" herunter.
 2. Installiere die Chrome-Erweiterung "**[Tampermonkey](https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo?hl=de)**".
@@ -11,6 +11,14 @@ Ein Button, der beim klicken den Pfad zum DFS-Ordner kopiert.
 6. Ein neuer Tab sollte sich öffnen. Bestätige mit "**Neu installieren**".
 7. Wenn ein IPSI-Projekt geöffnet wird und der "Domains Panel" ausgeklappt (& DFS bereits erstellt ist) ist oder DFS erstellt wird, wird unten rechts ein Button angezeigt.
 
+## Copy-Buttons und/oder Erweiterung Aktualisieren:
+
+1. Klick auf "**Tampermonkey**", in der Erweiterungsübersicht, oben rechts.
+2. Öffne die "**Übersicht**".
+3. 
+4. 
+5. 
+   
 ----
 
 ## Q&A

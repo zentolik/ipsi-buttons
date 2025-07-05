@@ -16,12 +16,12 @@ Ein Button, der beim klicken den Pfad zum DFS-Ordner kopiert.
 
 ## Copy-Buttons und/oder Erweiterung Aktualisieren:
 
-VERSION:
+NEUERE VERSIONEN:
 1. Klick auf "**Tampermonkey**", in der Erweiterungsübersicht, oben rechts.
 2. Öffne die "**Übersicht**".
 3. Klick auf den S
 
-VERSION:
+ÄLTERE VERSION:
 1. Klick auf "**Tampermonkey**", in der Erweiterungsübersicht, oben rechts.
 2. Öffne die "**Übersicht**".
 3. Klick auf den S

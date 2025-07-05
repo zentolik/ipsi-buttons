@@ -9,7 +9,7 @@ Ein Button, der beim klicken den Pfad zum DFS-Ordner kopiert.
 2. Installiere die Chrome-Erweiterung "**[Tampermonkey](https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo?hl=de)**".
 3. Script Installation
     - [Copy-Buttons installieren](https://github.com/zentolik/ipsi-buttons/raw/main/Copy-Buttons.user.js)
-    - [OTRS-Extension installieren](https://github.com/zentolik/ipsi-buttons/raw/main/_erweiterungen/OTRS-Extension/Copy-Buttons%20(OTRS-Extension).user.js)
+    - [OTRS-Extension installieren](https://github.com/zentolik/ipsi-buttons/raw/main/_erweiterungen/OTRS-Extension/Copy-Buttons%20(OTRS-Extension).user.js) (für die OTRS-Extension ist Copy-Buttons v oder neuer notwendig)
 
 - **[ZUR "CHROME-FOLDER-OPENER"-ANLEITUNG](https://github.com/zentolik/ipsi-buttons/tree/main/_erweiterungen/chrome-folder-opener)**
 

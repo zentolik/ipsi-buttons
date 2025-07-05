@@ -1,3 +1,5 @@
+# Updates
+
 **Copy-Buttons Update >0.5**
 
 kein plan, was ich da angestellt habe :)
@@ -34,26 +36,26 @@ UND: ʕ·͡ᴥ·ʔ *bup*
 
 ------------------------------------------------------------------------
 
-**Copy-Buttons Update 0.75 (15.10.24)**
+**Copy-Buttons Update 0.75 *(15.10.24)***
 
 Settings-Button wird jetzt zusammen mit dem Copy-Button generiert und nicht erst nachdem die IPSI-Projekt-Seite refreshed wurde.
 Kleine Anpassing am Styling des Setting-Feldes.
 
 ------------------------------------------------------------------------
 
-**Copy-Buttons Update 0.76 (16.10.24)**
+**Copy-Buttons Update 0.76 *(16.10.24)***
 
 Bug-Fix: Settings-Button wurde nicht jedes mal, beim öffnen einer Projekt-Seite, generiert.
 
 ------------------------------------------------------------------------
 
-**Copy-Buttons Update 0.77 (22.10.24)**
+**Copy-Buttons Update 0.77 *(22.10.24)***
 
 Style-Update: Abstände und Text-Größen angepasst.
 
 ------------------------------------------------------------------------
 
-**Copy-Buttons Update 0.8 (25.10.24)**
+**Copy-Buttons Update 0.8 *(25.10.24)***
 
 - Settings im localStorage passt sich dem default-settings im code an. Wenn ein Key (Settings-Feld) im localStorage fehlt, dass aber in den default-Settings ist, werden die fehlenden Keys & Values (Settings-Felder) mit in den localStorage hinzugefügt. Gleiches für fehlende Felder. Wenn Setting-Felder im localStorage existieren, aber nicht in den default-settings, wird dies aus dem localStorage entfernt.
 
@@ -69,7 +71,7 @@ Style-Update: Abstände und Text-Größen angepasst.
 
 ------------------------------------------------------------------------
 
-**Copy-Buttons Update 0.82 (01.11.24)**
+**Copy-Buttons Update 0.82 *(01.11.24)***
 
 - Button, der zur OTRS-Seite führt und einen Autofill startet (noch WIP und OTRS-Extension wird dafür benötigt).
 
@@ -79,7 +81,7 @@ Style-Update: Abstände und Text-Größen angepasst.
 
 ------------------------------------------------------------------------
 
-**Copy-Buttons Update 0.83 (04.11.24)**
+**Copy-Buttons Update 0.83 *(04.11.24)***
 
 - Kleinigkeiten am OTRS-Button angepasst.
 
@@ -87,7 +89,7 @@ Style-Update: Abstände und Text-Größen angepasst.
 
 ------------------------------------------------------------------------
 
-**Copy-Buttons Update 0.86 (23.05.25)**
+**Copy-Buttons Update 0.86 *(23.05.25)***
 
 - Sehr viele Style Anpassungen.
 
@@ -100,7 +102,7 @@ Style-Update: Abstände und Text-Größen angepasst.
 
 ------------------------------------------------------------------------
 
-**Copy-Buttons Update 0.87 (03.07.25)**
+**Copy-Buttons Update 0.87 *(03.07.25)***
 
 - Abstand Anpassung der Copy-Buttons, aufgrund des neuen IPSI-Updates (casbar in IPSI wurde erweitert). Danke für euer Feedback~ <3
 - Ebenfalls Abstand vom Success-Label angepasst.

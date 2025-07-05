@@ -3,7 +3,7 @@ Ein Button, der beim klicken den Pfad zum DFS-Ordner kopiert.
 
 ----
 
-## Copy-Buttons Installieren:
+## Copy-Buttons und/oder OTRS-Extension Installieren:
 
 1. Lade die aktuellste "**Copy-Buttons-X.X.user.js**" herunter.
 2. Installiere die Chrome-Erweiterung "**[Tampermonkey](https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo?hl=de)**".

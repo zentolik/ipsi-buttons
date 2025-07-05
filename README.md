@@ -26,7 +26,7 @@ Ein Button, der beim klicken den Pfad zum DFS-Ordner kopiert.
         `https://github.com/zentolik/ipsi-buttons/raw/main/_erweiterungen/OTRS-Extension/Copy-Buttons%20(OTRS-Extension).user.js`
 6. Klicke auf **„Speichern“**, um die Änderungen zu übernehmen.
 7. Führe anschließend ein manuelles Update durch, indem du auf **„Userscripte auf Updates prüfen“** klickst.
-> Nachdem diese Schritte einmal durchgeführt wurden, reicht es zukünftig
+> ***!WICHTIG!*** Nachdem diese Schritte einmal durchgeführt wurden, reicht es zukünftig
 > aus, einfach nur den Button **„Userscripte auf Updates prüfen“** zu
 > klicken, um nach Updates zu suchen und diese auszuführen.
 

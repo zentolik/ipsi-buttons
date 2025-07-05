@@ -12,11 +12,11 @@ Wenn man im gleichen Fenstern ein anderes Projekt geöffnet hatte, wurde noch de
 
 **Copy-Buttons Update 0.6**
  
-1. Die IPSI-Projekt-Daten werden jetzt in ein localStorage-Item als object abgespeichert, anstatt wie zuvor für jeden einzelnen Punkt ein neues Itemzu erstellen.
+- Die IPSI-Projekt-Daten werden jetzt in ein localStorage-Item als object abgespeichert, anstatt wie zuvor für jeden einzelnen Punkt ein neues Itemzu erstellen.
 
-2. Außerdem gibt's jetzt ein delete-btn, der das Projekt aus den localStorage entfernt. Würde das jedes mal machen, wenn das Projekt live gestellt wird, müsst ihr aber nicht.
+- Außerdem gibt's jetzt ein delete-btn, der das Projekt aus den localStorage entfernt. Würde das jedes mal machen, wenn das Projekt live gestellt wird, müsst ihr aber nicht.
  
-3. UND DAS WICHTIGSTE! custom COLOOORS, als hex-code. Aber ist im Test-Stadium, also nicht wundern, wenn's weird aussieht. ich empfehle die vorgegebenen Farben zu nutzten.
+- UND DAS WICHTIGSTE! custom COLOOORS, als hex-code. Aber ist im Test-Stadium, also nicht wundern, wenn's weird aussieht. ich empfehle die vorgegebenen Farben zu nutzten.
 
 ------------------------------------------------------------------------
 
@@ -94,9 +94,9 @@ Style-Update: Abstände und Text-Größen angepasst.
 - Es ist jetzt möglich, in der Projektübersicht, mehrere Projekte auf einmal zu markieren, wenn man den linken Mauszeiger gedrückt hält und über die Projekte hovert.
 
 - Es gibt jetzt 3 weitere Felder:
-    1. Ein Supportticket erstellen/abschicken: hier könnt ihr entweder mich kontaktieren, falls euch ein Bug auffällt, Vorschläge und/oder Ideen für den copy-button habt ODER auch wenn ihr BG kontaktieren müsst.
-    2. Deine Daten angeben: vorteilhaft, wenn du die Supportticketfunktion nutzen möchtest und später auch mit der OTRS-Erweiterung kompatibel.
-    3. E-Mail Client: da legt ihr nur fest, ob ihr die Outlook-App oder die Browser-Version nutzt.
+    - Ein Supportticket erstellen/abschicken: hier könnt ihr entweder mich kontaktieren, falls euch ein Bug auffällt, Vorschläge und/oder Ideen für den copy-button habt ODER auch wenn ihr BG kontaktieren müsst.
+    - Deine Daten angeben: vorteilhaft, wenn du die Supportticketfunktion nutzen möchtest und später auch mit der OTRS-Erweiterung kompatibel.
+    - E-Mail Client: da legt ihr nur fest, ob ihr die Outlook-App oder die Browser-Version nutzt.
 
 ------------------------------------------------------------------------
 

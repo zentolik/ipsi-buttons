@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Copy-Buttons
 // @namespace    https://github.com/zentolik
-// @version      0.87
+// @version      0.88
 // @description  doing stuff ʕ·͡ᴥ·ʔ
 // @author       Kaan Korkmaz
 // @match        https://ipsi.securewebsystems.net/project/detailed/*

@@ -14,7 +14,7 @@ Ein Button, der beim klicken den Pfad zum DFS-Ordner kopiert.
 
 ----
 
-## Anleitung zum Updaten (ab v0.88):
+## Anleitung zum Updaten (ab Copy-Buttons v0.88 / OTRS-Extension v0.06):
 - [Zum aktualisieren von **Copy-Buttons** hier klicken!](https://github.com/zentolik/ipsi-buttons/raw/main/Copy-Buttons.user.js)
 - [Zum aktualisieren von **OTRS-Extension** hier klicken!](https://github.com/zentolik/ipsi-buttons/raw/main/_erweiterungen/OTRS-Extension/Copy-Buttons%20(OTRS-Extension).user.js)
 

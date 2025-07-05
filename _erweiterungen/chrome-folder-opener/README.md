@@ -7,7 +7,7 @@
 4. **Aktiviere** oben rechts den **Entwicklermodus**.
 5. Klicke oben links auf "**Entpackte Erweiterung laden**".
 6. Wähle den Ordner "**extension**", innerhalb des Ordners "chrome-folder-opener", aus.
-7. Kopiere die **Erweiterungs-ID** der "Copy-Buttons (Folder-Extension)" aus der Übersicht.
+7. Kopiere die **Erweiterungs-ID** der "Copy-Buttons (Folder-Extension)" aus der Erweiterungsübersicht.
 
 ## Visual Studio Code:
 8. Öffne den Ordner "**chrome-folder-opener**" als neues Projekt in Visual Studio Code.

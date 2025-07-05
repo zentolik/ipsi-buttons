@@ -40,6 +40,7 @@
 19. Öffne die Datei "**register_native_host.reg**" in Visual Studio Code.
 20. Ersetze den Platzhalter "**<PFAD_ZUR_FOLDER_FOLDER_OPENER.JSON>**" mit dem kopierten Pfad. Achte dabei darauf, dass zwei umgekehrte Schrägstriche (\\\\) verwendet werden.
     **Beispiel:** `@="C:\\Users\\Name\\Downloads\\chrome-folder-opener\\native_host\\folder_opener.json"`
-	## Die letzten Schritte:
+
+## Die letzten Schritte:
 21. Führe die Datei "**register_native_host.reg**" aus.
 22. **Starte Chrome komplett neu.**

@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @version      0.02
 // @description  Funktioniert nur mit Copy-Buttons Version 0.82 oder neuer!
-// @author       Kaan Korkmaz
+// @author       Zentolik
 // @match        https://otrs.euroweb.net/index.pl?Action=AgentTicketEmail*
 // @match        https://ipsi.securewebsystems.net/project/detailed/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=otrs.euroweb.net

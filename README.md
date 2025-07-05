@@ -15,8 +15,8 @@ Ein Button, der beim klicken den Pfad zum DFS-Ordner kopiert.
 ----
 
 ## Anleitung zum Aktivieren automatischer Updates (ab v0.88):
-    - [Copy-Buttons aktualisieren](https://github.com/zentolik/ipsi-buttons/raw/main/Copy-Buttons.user.js)
-    - [OTRS-Extension aktualisieren](https://github.com/zentolik/ipsi-buttons/raw/main/_erweiterungen/OTRS-Extension/Copy-Buttons%20(OTRS-Extension).user.js)
+- [Copy-Buttons aktualisieren](https://github.com/zentolik/ipsi-buttons/raw/main/Copy-Buttons.user.js)
+- [OTRS-Extension aktualisieren](https://github.com/zentolik/ipsi-buttons/raw/main/_erweiterungen/OTRS-Extension/Copy-Buttons%20(OTRS-Extension).user.js)
 
 ## Anleitung zum Aktivieren (für ältere Versionen):
 1. Klicke oben rechts in der Erweiterungsleiste auf **„Tampermonkey“**. 

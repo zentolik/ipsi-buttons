@@ -12,7 +12,7 @@ Ein Button, der beim klicken den Pfad zum DFS-Ordner kopiert.
 5. Per Drag-&-Drop die "**.user.js**"-Datei in die geöffnete Tampermonkey-Übersicht schieben.
 6. Ein neuer Tab sollte sich öffnen. Bestätige mit "**Neu installieren**".
 
-**- [ZUR "CHROME-FOLDER-OPENER"-ANLEITUNG](https://github.com/zentolik/ipsi-buttons/tree/main/_erweiterungen/chrome-folder-opener)**
+- **[ZUR "CHROME-FOLDER-OPENER"-ANLEITUNG](https://github.com/zentolik/ipsi-buttons/tree/main/_erweiterungen/chrome-folder-opener)**
 
 ----
 

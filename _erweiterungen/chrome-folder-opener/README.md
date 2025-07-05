@@ -19,7 +19,7 @@
 > Wenn "Als Pfad kopieren" nicht als Option angezeigt wird, versuch
 > stattdessen "Umschalttaste (Shift) gedrückt halten" und dann
 > "rechtsklicke" auf die "folder_opener.json"-Datei.
-	## Visual Studio Code *(erneut)*:
+	#### Visual Studio Code *(erneut)*:
 14. Öffne erneut die Datei "**folder_opener.json**" in Visual Studio Code.
 15. Ersetze hinter "path" den Platzhalter "**<PFAD_ZUR_FOLDER_OPENER.EXE>**" mit dem kopierten Pfad. Achte dabei darauf, dass zwei umgekehrte Schrägstriche (\\\\) verwendet werden.
 	***Beispiel:*** `"path": "C:\\Users\\Name\\Downloads\\chrome-folder-opener\\native_host\\folder_opener.exe"`
@@ -30,7 +30,7 @@
 > Wenn "Als Pfad kopieren" nicht als Option angezeigt wird, versuch
 > stattdessen "Umschalttaste (Shift) gedrückt halten" und dann
 > "rechtsklicke" auf die "folder_opener.json"-Datei.
-	## Visual Studio Code *(erneut)*:
+	#### Visual Studio Code *(erneut)*:
 19. Öffne die Datei "**register_native_host.reg**" in Visual Studio Code.
 20. Ersetze den Platzhalter "**<PFAD_ZUR_FOLDER_FOLDER_OPENER.JSON>**" mit dem kopierten Pfad. Achte dabei darauf, dass zwei umgekehrte Schrägstriche (\\\\) verwendet werden.
     **Beispiel:** `@="C:\\Users\\Name\\Downloads\\chrome-folder-opener\\native_host\\folder_opener.json"`

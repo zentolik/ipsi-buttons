@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Copy-Buttons
-// @namespace    http://tampermonkey.net/
+// @namespace    https://github.com/zentolik
 // @version      0.87
 // @description  doing stuff ʕ·͡ᴥ·ʔ
 // @author       Kaan Korkmaz

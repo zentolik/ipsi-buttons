@@ -28,7 +28,7 @@ Ein Button, der beim klicken den Pfad zum DFS-Ordner kopiert.
 ## Q&A
 
 **Button wird nicht angezeigt?**
-- Versucht in eurer Chrome-Extension-Übersicht ([chrome://extensions/](https://chrome://extensions/)), oben rechts, den Entwicklermodus zu aktivieren. Wiederholt dann wieder ab Schritt 3.
+- Versucht in eurer Chrome-Extension-Übersicht (chrome://extensions/), oben rechts, den Entwicklermodus zu aktivieren. Wiederholt dann wieder ab Schritt 3.
 
 **Ihr wollt updaten, auf eine neuere/ältere Version?**
 - Ladet die Version eurer Wahl runter und Folgt ab Schritt 5. Die alte Version wird mit der neu eingefügten Version überschrieben.

@@ -1,4 +1,4 @@
-# project-wwwe
+# project ipsi-buttons
 Ein Button, der beim klicken den Pfad zum DFS-Ordner kopiert.
 
 ----

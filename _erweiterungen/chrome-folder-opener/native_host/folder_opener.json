@@ -1,0 +1,9 @@
+{
+  "name": "com.folder.opener",
+  "description": "Folder Opener Native Host",
+  "path": "<PFAD_ZUR_FOLDER_OPENER.EXE>",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://<DEINE_EXTENSION_ID>/"
+  ]
+}

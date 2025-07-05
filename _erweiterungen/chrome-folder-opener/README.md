@@ -13,6 +13,7 @@
 8. Öffne den Ordner "**chrome-folder-opener**" als neues Projekt in Visual Studio Code.
 9. Öffne die Datei "**folder_opener.json**".
 10. Ersetze den Platzhalter "**<DEINE_EXTENSION_ID>**" mit der kopierten Erweiterungs-ID.
+
     ***Beispiel:*** `chrome-extension://superkickerfullnicediggalul/`
 
 ## Windows Explorer:
@@ -26,7 +27,8 @@
 ## Visual Studio Code *(erneut)*:
 14. Öffne erneut die Datei "**folder_opener.json**" in Visual Studio Code.
 15. Ersetze hinter "path" den Platzhalter "**<PFAD_ZUR_FOLDER_OPENER.EXE>**" mit dem kopierten Pfad. Achte dabei darauf, dass zwei umgekehrte Schrägstriche (\\\\) verwendet werden.
-	***Beispiel:*** `"path": "C:\\Users\\Name\\Downloads\\chrome-folder-opener\\native_host\\folder_opener.exe"`
+
+    ***Beispiel:*** `"path": "C:\\Users\\Name\\Downloads\\chrome-folder-opener\\native_host\\folder_opener.exe"`
 
 ## Windows Explorer *(erneut)*:
 16. Öffne den Ordner "**native_host**" im Windows Explorer.
@@ -39,6 +41,7 @@
 ## Visual Studio Code *(erneut)*:
 19. Öffne die Datei "**register_native_host.reg**" in Visual Studio Code.
 20. Ersetze den Platzhalter "**<PFAD_ZUR_FOLDER_FOLDER_OPENER.JSON>**" mit dem kopierten Pfad. Achte dabei darauf, dass zwei umgekehrte Schrägstriche (\\\\) verwendet werden.
+
     **Beispiel:** `@="C:\\Users\\Name\\Downloads\\chrome-folder-opener\\native_host\\folder_opener.json"`
 
 ## Die letzten Schritte:

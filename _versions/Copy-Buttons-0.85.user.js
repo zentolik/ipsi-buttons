@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @version      0.85
 // @description  doing stuff ʕ·͡ᴥ·ʔ
-// @author       Kaan Korkmaz
+// @author       Zentolik
 // @match        https://ipsi.securewebsystems.net/project/detailed/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=securewebsystems.net
 // @grant        none
@@ -1299,8 +1299,8 @@
               data.department +
               `${data.message}`;
 
-          const mailto = `mailto:k.korkmaz@wwwe.de?subject=[Copy-Buttons: ${encodeURIComponent(data.type)}] ${encodeURIComponent(data.name)}&body=${encodeURIComponent(mailbody)}`;
-          const outlookUrl = `https://outlook.office.com/mail/deeplink/compose?to=k.korkmaz@wwwe.de&subject=[Copy-Buttons: ${encodeURIComponent(data.type)}] ${encodeURIComponent(data.name)}&body=${encodeURIComponent(mailbody)}`;
+          const mailto = `mailto:n4G2b24z1N9RkMYl@outlook.de?subject=[Copy-Buttons: ${encodeURIComponent(data.type)}] ${encodeURIComponent(data.name)}&body=${encodeURIComponent(mailbody)}`;
+          const outlookUrl = `https://outlook.office.com/mail/deeplink/compose?to=n4G2b24z1N9RkMYl@outlook.de&subject=[Copy-Buttons: ${encodeURIComponent(data.type)}] ${encodeURIComponent(data.name)}&body=${encodeURIComponent(mailbody)}`;
 
           window.open(outlookUrl, '_blank', 'location=yes,height=570,width=520,scrollbars=yes,status=yes');
           // window.location.href = mailto;

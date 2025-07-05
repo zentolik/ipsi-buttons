@@ -3,7 +3,7 @@
 // @namespace    https://github.com/zentolik
 // @version      0.88
 // @description  doing stuff ʕ·͡ᴥ·ʔ
-// @author       Kaan Korkmaz
+// @author       Zentolik
 // @match        https://ipsi.securewebsystems.net/project/detailed/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=securewebsystems.net
 // @updateURL    https://github.com/zentolik/ipsi-buttons/raw/main/Copy-Buttons.user.js

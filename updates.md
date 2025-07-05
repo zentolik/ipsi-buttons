@@ -108,3 +108,9 @@ Style-Update: Abstände und Text-Größen angepasst.
 - Ebenfalls Abstand vom Success-Label angepasst.
 
 ------------------------------------------------------------------------
+
+**Copy-Buttons Update 0.88 *(05.07.25)***
+
+- automatische Updates...
+
+------------------------------------------------------------------------

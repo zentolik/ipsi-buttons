@@ -19,7 +19,7 @@ Ein Button, der beim klicken den Pfad zum DFS-Ordner kopiert.
 - [Zum aktualisieren von **OTRS-Extension** hier klicken!](https://github.com/zentolik/ipsi-buttons/raw/main/_erweiterungen/OTRS-Extension/Copy-Buttons%20(OTRS-Extension).user.js)
 
 ## Anleitung zum Updaten (für ältere Versionen):
-1. Lade die Version runter herunter, die du installieren möchtest.
+1. Lade die "**.user.js**"-Datei *(/Version)* runter herunter, die du installieren möchtest.
 2. Klick auf "**Tampermonkey**", in der Erweiterungsübersicht, oben rechts.
 3. Öffne die "**Übersicht**".
 4. Per Drag-&-Drop die "**.user.js**"-Datei in die geöffnete Tampermonkey-Übersicht schieben.

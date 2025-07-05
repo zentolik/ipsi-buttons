@@ -5,13 +5,12 @@ Ein Button, der beim klicken den Pfad zum DFS-Ordner kopiert.
 
 ## Copy-Buttons/OTRS-Extension Installieren:
 
-1. Lade die aktuellste "**Copy-Buttons-X.X.user.js**" herunter.
+1. Lade die aktuellste "**.user.js**" herunter.
 2. Installiere die Chrome-Erweiterung "**[Tampermonkey](https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo?hl=de)**".
 3. Klick auf "**Tampermonkey**", in der Erweiterungsübersicht, oben rechts.
 4. Öffne die "**Übersicht**".
-5. Per Drag-&-Drop die "**Copy-Buttons-X.X.user.js**"-Datei in die geöffnete Tampermonkey-Übersicht schieben.
+5. Per Drag-&-Drop die "**.user.js**"-Datei in die geöffnete Tampermonkey-Übersicht schieben.
 6. Ein neuer Tab sollte sich öffnen. Bestätige mit "**Neu installieren**".
-7. Wenn ein IPSI-Projekt geöffnet wird und der "Domains Panel" ausgeklappt (& DFS bereits erstellt ist) ist oder DFS erstellt wird, wird unten rechts ein Button angezeigt.
 
 ----
 

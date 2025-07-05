@@ -6,6 +6,8 @@
 // @author       Kaan Korkmaz
 // @match        https://ipsi.securewebsystems.net/project/detailed/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=securewebsystems.net
+// @updateURL    https://github.com/zentolik/ipsi-buttons/raw/main/Copy-Buttons.user.js
+// @downloadURL  https://github.com/zentolik/ipsi-buttons/raw/main/Copy-Buttons.user.js
 // @grant        none
 // ==/UserScript==
 

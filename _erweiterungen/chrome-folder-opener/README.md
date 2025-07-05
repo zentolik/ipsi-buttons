@@ -1,5 +1,5 @@
-0. Ladet den Ordner "chrome-folder-opener" herunter und verschiebt ihn an einen festen Speicherort eurer Wahl (zB. in euren Benutzerordner oder Dokumente).
-    Achtung: Nach Abschluss der Einrichtung darf der Ordner nicht mehr verschoben oder umbenannt werden, da sonst die Verknüpfungen nicht mehr funktionieren, da die pfade abosult sind.
+0. Ladet den Ordner "**chrome-folder-opener**" herunter und verschiebt ihn an einen festen Speicherort eurer Wahl (zB. in euren Benutzerordner oder Dokumente).
+    **Achtung:** Nach Abschluss der Einrichtung darf der Ordner nicht mehr verschoben oder umbenannt werden, da sonst die Verknüpfungen nicht mehr funktionieren, da die pfade abosult sind.
 	## Chrome:
 1. Öffne Chrome.
 2. Gib in die Adresszeile "`chrome://extensions/`" ein *(oder öffne deine Erweiterungsübersicht)*.

@@ -12,7 +12,7 @@
 ## Visual Studio Code:
 8. Öffne den Ordner "**chrome-folder-opener**" als neues Projekt in Visual Studio Code.
 9. Öffne die Datei "**folder_opener.json**".
-10. Ersetze den Platzhalter "**<DEINE_EXTENSION_ID>**" mit der kopierten Erweiterungs-ID.
+10. Ersetze den Platzhalter "**<DEINE_EXTENSION_ID>**" mit der kopierten **Erweiterungs-ID**.
 
     ***Beispiel:*** `chrome-extension://superkickerfullnicediggalul/`
 

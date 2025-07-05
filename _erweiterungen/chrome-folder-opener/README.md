@@ -16,7 +16,6 @@
 10. Öffne den Ordner "**native_host**" im Windows Explorer.
 11. Rechtsklicke auf die Datei "**folder_opener.exe**".
 12. Wähle "**Als Pfad kopieren**" aus dem Kontextmenü.
-
 > Wenn "Als Pfad kopieren" nicht als Option angezeigt wird, versuch
 > stattdessen "Umschalttaste (Shift) gedrückt halten" und dann
 > "rechtsklicke" auf die "folder_opener.json"-Datei.
@@ -31,7 +30,7 @@
 > Wenn "Als Pfad kopieren" nicht als Option angezeigt wird, versuch
 > stattdessen "Umschalttaste (Shift) gedrückt halten" und dann
 > "rechtsklicke" auf die "folder_opener.json"-Datei.
-	## Visual Studio Code (erneut):
+	## Visual Studio Code *(erneut)*:
 19. Öffne die Datei "**register_native_host.reg**" in Visual Studio Code.
 20. Ersetze den Platzhalter "**<PFAD_ZUR_FOLDER_FOLDER_OPENER.JSON>**" mit dem kopierten Pfad. Achte dabei darauf, dass zwei umgekehrte Schrägstriche (\\\\) verwendet werden.
     **Beispiel:** `@="C:\\Users\\Name\\Downloads\\chrome-folder-opener\\native_host\\folder_opener.json"`

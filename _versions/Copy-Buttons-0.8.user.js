@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @version      0.80
 // @description  doing stuff ʕ·͡ᴥ·ʔ
-// @author       Kaan Korkmaz
+// @author       Zentolik
 // @match        https://ipsi.securewebsystems.net/project/detailed/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=securewebsystems.net
 // @grant        none

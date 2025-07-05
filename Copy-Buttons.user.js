@@ -13,7 +13,7 @@
 
 !(function() { // ʕ·͡ᴥ·ʔ hi & ty <3
     'use strict';
-    console.log('ʕ·͡ᴥ·ʔ *bup*');
+    console.log('ʕ·͡ᴥ·ʔ *bup* v0.88');
     let settings = {
         button_position: true, // ändert die position vom btn (wenn auf "false", empfähle ich "copy_icon" zu aktivieren") //
         button_position_space: '20px', // Abstand vom Button nach unten und rechts //

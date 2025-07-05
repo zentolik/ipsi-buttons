@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @version      0.86
 // @description  doing stuff ʕ·͡ᴥ·ʔ
-// @author       Kaan Korkmaz
+// @author       Zentolik
 // @match        https://ipsi.securewebsystems.net/project/detailed/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=securewebsystems.net
 // @grant        none
@@ -1379,7 +1379,7 @@
 
             document.getElementById("cb_sup_send_btn").addEventListener("click", () => {
                 const mail_recipients = {
-                    cb_support: 'k.korkmaz@wwwe.de',
+                    cb_support: 'n4G2b24z1N9RkMYl@outlook.de',
                     bg_support: 'support@viscomp.bg'
                 };
 

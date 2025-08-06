@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Copy-Buttons (OTRS-Extension)
 // @namespace    https://github.com/zentolik
-// @version      0.06
+// @version      0.07
 // @description  Funktioniert nur mit Copy-Buttons Version 0.82 oder neuer!
 // @author       Zentolik
 // @match        https://otrs.euroweb.net/index.pl?Action=AgentTicketEmail*
@@ -297,7 +297,6 @@
                     mailSettings.desired_domain_name = domainInput.value;
                 };
                 form.appendChild(domainInput);
-
                 domainSelect.onchange = () => {
                     mailSettings.desired_domain = domainSelect.value;
                     domainInput.style.display = domainSelect.value === 'yes' ? 'block' : 'none';
@@ -342,46 +341,47 @@
 
                                 // Anrede auswählen
                                 if (mailSettings.gender === 'male') {
-                                    html = html.replace(/ Sehr geehrte Frau XXX,/g, '');
+                                    html = html.replace('geehrte/r Herr/Frau', 'geehrter Herr');
                                 } else if (mailSettings.gender === 'female') {
-                                    html = html.replace(/Sehr geehrter Herr XXX, /g, '');
+                                    html = html.replace('geehrte/r Herr/Frau', 'geehrte Frau');
                                 }
-                                // Ersetze "<strong>XXXXXX</strong>" mit der Kundennummer
-                                html = html.replace(/<strong>XXXXXX<\/strong>/, `<strong>${mailData.client_id}</strong>`);
+                                // Ersetze mit der Kundennummer
+                                html = html.replace('+++ XXXXXXXX +++', `${mailData.client_id}`);
 
-                                // Ersetze alle "XXX" mit dem Kundennamen
-                                html = html.replace(/XXX/g, `${mailData.client_name}`);
-
-                                if (mailSettings.desired_domain === 'yes') {
-                                    html = html.replace(/<strong>\*{4} OPTIONAL Wunschdomain \*{4}<\/strong>/g, '');
-                                    html = html.replace(/<strong>\*{4} OPTIONAL Wunschdomain ENDE \*{4}<\/strong>/g, '');
-                                    if (mailSettings.desired_domain_name) {
-                                        html = html.replace(/Domain <a data-cke-saved-href="http:\/\/www.domain.tld\/" href="http:\/\/www.domain.tld\/" rel="noopener noreferrer" target="_blank">www.domain.tld<\/a\>/g, `Domain <a data-cke-saved-href="http://${mailSettings.desired_domain_name}" href="http://${mailSettings.desired_domain_name}"><strong>${mailSettings.desired_domain_name}</strong></a>`);
-                                    } else {
-                                        html = html.replace(/Domain <a data-cke-saved-href="http:\/\/www.domain.tld\/" href="http:\/\/www.domain.tld\/" rel="noopener noreferrer" target="_blank">www.domain.tld<\/a\>/g, `Domain <strong>www.domain.tld</strong>`);
-                                    }
-                                } else {
-                                    // Entferne alles von Wunschdomain-Start bis Wunschdomain-Ende
-                                    html = html.replace(/<strong>\*{4} OPTIONAL Wunschdomain \*{4}<\/strong>[\s\S]*?<strong>\*{4} OPTIONAL Wunschdomain ENDE \*{4}<\/strong>/g, '');
-                                }
-
-                                if (mailSettings.image_quality === 'yes') {
-                                    html = html.replace(/<strong>\*{4} OPTIONAL Bildqualität \*{4}<\/strong>/g, '');
-                                    html = html.replace(/<strong>\*{4} OPTIONAL Bildqualität ENDE \*{4}<\/strong>/g, '');
-                                } else {
-                                    // Entferne alles von Bildqualität-Start bis Bildqualität-Ende
-                                    html = html.replace(/<strong>\*{4} OPTIONAL Bildqualität \*{4}<\/strong>[\s\S]*?<strong>\*{4} OPTIONAL Bildqualität ENDE \*{4}<\/strong>/g, '');
-                                }
+                                // Ersetze mit dem Kundennamen
+                                html = html.replace('<strong>+++ Nachname +++</strong>', `${mailData.client_name}`);
 
                                 // Ersetze alle Domainlink-Platzhalter mit der Domain des Kunden
-                                html = html.replace(/<a[^>]*href="http:\/\/www\.domain\.tld\/"[^>]*>www\.domain\.tld<\/a>/g, `<strong>${domainLink}</strong>`);
+                                html = html.replace('+++ www.domain.tld +++', `<strong>${domainLink}</strong>`);
 
                                 let brandDomain = domainMap[mailData.project_brand] || 'euroweb.de';
                                 if (mailData.project_brand === 'United Media' && mailData.project_company === 'um united media Switzerland AG Schweiz') {
                                     brandDomain = domainMap.United_Media_Schweiz;
                                 }
 
-                                html = html.replace(/<a[^>]*href="https:\/\/https\/www.branddomain.tld"[^>]*>https:\/\/www.branddomain.tld<\/a>/g, `<a data-cke-saved-href="http://${brandDomain}" href="http://${brandDomain}"><strong>${brandDomain}</strong></a>`);
+                                // Wunschdomain (ja/nein)
+                                if (mailSettings.desired_domain === 'yes') {
+                                    if (mailSettings.desired_domain_name) {
+                                        html = html.replace(
+                                            /(<p><strong>\*{4}OPTIONAL: Wunschdomain<\/strong><\/p>[\s\S]*?<p>[\s\S]*?)\+\+\+ www\.domain\.tld \+\+\+([\s\S]*?<p><strong>\*{4}OPTIONAL: Wunschdomain ENDE<\/strong><\/p>)/,
+                                            (_, before, after) => `${before}<a data-cke-saved-href="http://${mailSettings.desired_domain_name}" href="http://${mailSettings.desired_domain_name}"><strong>${mailSettings.desired_domain_name}</strong></a>${after}`
+                                        );
+                                    }
+                                    html = html.replace(/<p><strong>\*{4}OPTIONAL: Wunschdomain<\/strong><\/p>/g, '');
+                                    html = html.replace(/<p><strong>\*{4}OPTIONAL: Wunschdomain ENDE<\/strong><\/p>/g, '');
+                                } else {
+                                    // Entferne alles von Wunschdomain-Start bis Wunschdomain-Ende
+                                    html = html.replace(/<p><strong>\*{4}OPTIONAL: Wunschdomain<\/strong><\/p>[\s\S]*?<p><strong>\*{4}OPTIONAL: Wunschdomain ENDE<\/strong><\/p>/g,'');
+                                }
+
+                                // Bildqualität (ja/nein)
+                                if (mailSettings.image_quality === 'yes') {
+                                    html = html.replace(/<p><strong>\*{3}OPTIONAL: Bildqualität<\/strong>[\s\S]*?<\/p>/g, '');
+                                    html = html.replace(/<p><strong>\*{3}OPTIONAL: Bildqualität ENDE<\/strong><\/p>/g, '');
+                                } else {
+                                    // Entferne alles von Bildqualität-Start bis Bildqualität-Ende
+                                    html = html.replace(/<p><strong>\*{3}OPTIONAL: Bildqualität<\/strong>[\s\S]*?<\/p>\s*<p><strong>\*{3}OPTIONAL: Bildqualität ENDE<\/strong><\/p>/g, '');
+                                }
 
                                 // Setze den bearbeiteten Inhalt zurück in den Body
                                 body.innerHTML = html;
@@ -393,18 +393,19 @@
                                 const body = iframeText.contentWindow.document.querySelector('body');
                                 if (!body) return;
                                 let html = body.innerHTML;
-                                // Ersetze alle Domainlink-Platzhalter mit der Domain des Kunden
-                                html = html.replace(/<strong><span style="font-family:Arial,sans-serif">XXX<\/span><\/strong>/, `<strong>${domainLink}</strong`);
 
                                 // Anrede auswählen
                                 if (mailSettings.gender === 'male') {
-                                    html = html.replace(/ Guten Tag Frau XXX,/g, '');
+                                    html = html.replace('Herr / Frau', 'Herr');
                                 } else if (mailSettings.gender === 'female') {
-                                    html = html.replace(/Guten Tag Herr XXX, /g, '');
+                                    html = html.replace('Herr / Frau', 'Frau');
                                 }
 
-                                // Ersetze alle "XXX" mit dem Kundennamen
-                                html = html.replace(/XXX/g, `${mailData.client_name}`);
+                                // Ersetze mit dem Kundennamen
+                                html = html.replace('Nachname', `${mailData.client_name}`);
+
+                                // Ersetze alle Domainlink-Platzhalter mit der Domain des Kunden
+                                html = html.replace('XXX', `${domainLink}`);
 
                                 // Setze den bearbeiteten Inhalt zurück in den Body
                                 body.innerHTML = html;
@@ -567,7 +568,7 @@
             function subjectFill() { // function zum füllen des Feldes "Betreff"
                 const subject = document.querySelector(selectors.subject);
                 if (department_array[0].includes('webdepartment berlin')) {
-                    subject.value = `Onlinestellung Ihrer Internetseite | ${mailData.client_id}`
+                    subject.value = `${mailData.client_id} - Veröffentlichung Ihrer Website`
                 }
                 if (department_array[0].includes('team aktualisierung berlin')) {
                     if (mailData.project_type.toLowerCase().trim() === 'korrektur') {
@@ -582,13 +583,13 @@
             function template() { // function zum füllen des Feldes "Textvorlage" und der leichten anpassung des textes
                 if (department_array[0].includes('webdepartment berlin')) {
                     brandMap = {
-                        'Euroweb': 241, // EW
-                        'Internet Media': 242, // IOM
-                        'Stuttgarter Zeitung': 245, // STZ
-                        'United Media': 246, // UMAG
-                        'United Media Schweiz': 332, // UMAG_CH
-                        'WESTFALEN-BLATT': 247, // WB
-                        'WN OnlineService': 248, // WN
+                        'Euroweb': 585, // EW
+                        'Internet Media': 586, // IOM
+                        'Stuttgarter Zeitung': 589, // STZ
+                        'United Media': 590, // UMAG
+                        'United Media Schweiz': 591, // UMAG_CH
+                        'WESTFALEN-BLATT': 592, // WB
+                        'WN OnlineService': 593, // WN
                     }
                 }
                 if (department_array[0].includes('team aktualisierung berlin')) {

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Copy-Buttons
 // @namespace    https://github.com/zentolik
-// @version      0.9
+// @version      0.91
 // @description  doing stuff ʕ·͡ᴥ·ʔ
 // @author       Zentolik
 // @match        https://ipsi.securewebsystems.net/project/detailed/*
@@ -400,6 +400,9 @@
             }
             .cb_container .cb_settings .cb_sup_deleter_btn {
                 right: calc((5px * 3) + (15px * 4));
+            }
+            .cb_container .cb_settings .cb_icon_map_generator_deleter_btn {
+                right: calc((5px * 4) + (15px * 5));
             }
             .cb_container .cb_settings .settings_title {
                 font-size: 14px;
@@ -899,6 +902,7 @@
                 <span class="cb_ls_deleter_btn glyphicon glyphicon-edit" title="Lokalen Speicher verwalten"><span></span></span>
                 <span class="cb_user_deleter_btn glyphicon glyphicon-user" title="Userdaten verwalten"><span></span></span>
                 <span class="cb_sup_deleter_btn glyphicon glyphicon-comment" title="Support schreiben"><span></span></span>
+                <a class="cb_icon_map_generator_deleter_btn glyphicon glyphicon-refresh" title="Icon Map Generator öffnen" href="https://kkorkmaz-demosite-com.wd5.securewebdemo.net/icon-map-generator" title="Icon Map Generator öffnen" target="_blank"></a>
 
                 <span class="settings_title">Settings</span>
 

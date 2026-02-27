@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Copy-Buttons
 // @namespace    https://github.com/zentolik
-// @version      0.89
+// @version      0.9
 // @description  doing stuff ʕ·͡ᴥ·ʔ
 // @author       Zentolik
 // @match        https://ipsi.securewebsystems.net/project/detailed/*
@@ -30,8 +30,8 @@
     };
 
     const selectors = { // Attribute, zum selektieren der Container
-        server_attr: 'data-v-8744275e',
-        href_attr: 'data-v-2a36c6f6',
+        server_attr: 'data-v-7fcb082d', // selector zum edo-btn
+        href_attr: 'data-v-2a36c6f6', // selector zur live-domain vom Kunden
         dfs_attr: 'data-v-08642a33',
     };
 
@@ -88,7 +88,7 @@
     const checkForElement = () => {
         if (loadFromLocalStorage()) return clearInterval(intervalId);
 
-        const btnPrimary = document.querySelector(`div[${selectors.server_attr}] > button.btn-primary`),
+        const btnPrimary = document.querySelector(`button[${selectors.server_attr}].btn-primary`),
               serverElement = Array.from(document.querySelectorAll(`b[${selectors.dfs_attr}]`)).find(el => el.innerText.toLowerCase().trim() === "server:"),
               firmaElement = Array.from(document.querySelectorAll('#collapseOne .panel-body p b')).find(el => el.innerText.toLowerCase().trim() === "firma:"),
               brandElement = Array.from(document.querySelectorAll('#collapseOne .panel-body p b')).find(el => el.innerText.toLowerCase().trim() === "brand:"),

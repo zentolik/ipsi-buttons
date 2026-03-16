@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Copy-Buttons
 // @namespace    https://github.com/zentolik
-// @version      0.91
+// @version      0.92
 // @description  doing stuff ʕ·͡ᴥ·ʔ
 // @author       Zentolik
 // @match        https://ipsi.securewebsystems.net/project/detailed/*
@@ -13,7 +13,7 @@
 
 !(function() { // ʕ·͡ᴥ·ʔ hi & ty <3
     'use strict';
-    console.log('ʕ·͡ᴥ·ʔ *bup* v0.89');
+    console.log('ʕ·͡ᴥ·ʔ *bup* v0.92');
     let settings = {
         button_position: true, // ändert die position vom btn (wenn auf "false", empfähle ich "copy_icon" zu aktivieren") //
         button_position_space: '20px', // Abstand vom Button nach unten und rechts //
@@ -30,7 +30,7 @@
     };
 
     const selectors = { // Attribute, zum selektieren der Container
-        server_attr: 'data-v-7fcb082d', // selector zum edo-btn
+        server_attr: ['data-v-7fcb082d','data-v-8744275e'], // selector zum edo-btn
         href_attr: 'data-v-2a36c6f6', // selector zur live-domain vom Kunden
         dfs_attr: 'data-v-08642a33',
     };
@@ -88,15 +88,15 @@
     const checkForElement = () => {
         if (loadFromLocalStorage()) return clearInterval(intervalId);
 
-        const btnPrimary = document.querySelector(`button[${selectors.server_attr}].btn-primary`),
+        let btnPrimary = document.querySelector(`button[${selectors.server_attr[0]}].btn-primary`),
               serverElement = Array.from(document.querySelectorAll(`b[${selectors.dfs_attr}]`)).find(el => el.innerText.toLowerCase().trim() === "server:"),
               firmaElement = Array.from(document.querySelectorAll('#collapseOne .panel-body p b')).find(el => el.innerText.toLowerCase().trim() === "firma:"),
               brandElement = Array.from(document.querySelectorAll('#collapseOne .panel-body p b')).find(el => el.innerText.toLowerCase().trim() === "brand:"),
               typElement = Array.from(document.querySelectorAll('#collapseOne .panel-body p b')).find(el => el.innerText.toLowerCase().trim() === "typ"),
               emailElement = Array.from(document.querySelectorAll('#collapseOne .panel-body p b')).find(el => el.innerText.toLowerCase().trim() === "e-mail:");
+        if (!btnPrimary) {btnPrimary = document.querySelector(`div[${selectors.server_attr[1]}] > button.btn-primary`);}
         if ((btnPrimary || serverElement) && loopListener) {
             edo = btnPrimary?.innerText.toLowerCase().trim() || edo;
-
             if (serverElement) {
                 const selectElement = serverElement.closest(`tr[${selectors.dfs_attr}]`)?.querySelector(`select[${selectors.dfs_attr}]`);
                 selectElement?.addEventListener("input", () => {
@@ -106,7 +106,6 @@
                     });
                 });
             }
-
             if (edoList.includes(edo)) {
                 let client_id = document.querySelector('h1').textContent.replace(/\D/g, ''),
                     client_domain = document.querySelector(`a[${selectors.href_attr}].text-primary`).textContent,
@@ -134,17 +133,14 @@
                     project_type
                 };
                 localStorage.setItem(project_id, JSON.stringify(dataToStore));
-
                 createButtonContainer();
                 createSettings();
                 loopListener = false;
                 createCopyButton(edo, client_id, client_domain, 'copyPath');
                 createCopyButton(edo, client_id, client_domain, 'copyClientdata');
-
                 if (settings.open_folder) {
                     openFolderButton(edo, client_id);
                 }
-
                 clearInterval(intervalId);
             }
         }
@@ -161,7 +157,6 @@
             });
             container.className = 'copyBtnContainer';
             document.body.appendChild(container);
-
             settings.delete_button && createRemoveButton();
         }
     };
@@ -182,7 +177,6 @@
                 }
                 removeButton.remove();
             });
-
             document.querySelector('.copyBtnContainer').appendChild(removeButton);
         }
     };
@@ -238,7 +232,6 @@
                 button.addEventListener('click', () =>
                     window.open(`https://otrs.euroweb.net/index.pl?Action=AgentTicketEmail#${JSON.stringify(extendedData)}`, '_blank')
                 );
-
             }
         }
         function setBtnProperties(button) {
@@ -277,13 +270,11 @@
         const casbar = user_bar.shadowRoot.querySelector('.casbar-wrapper');
         const casbar_height = casbar.clientHeight;
         const copyPath_height = document.querySelector('#copyPath').clientHeight;
-
         const bottomValue = settings.button_position ? `calc((${settings.button_position_space} * 2) + (${casbar_height} * 1px) + (${copyPath_height} * 1px))` : `calc(${casbar_height} * 1px)`;
         const bottomPosition = notifications.length * 18;
         notification.style.bottom = `calc(${bottomPosition}px + ${bottomValue})`;
         notification.style.opacity = 1;
         notifications.push(notification);
-
         setTimeout(() => {
             notification.style.opacity = 0;
             notification.addEventListener('transitionend', () => {
@@ -305,16 +296,13 @@
 
     const createSettings = () => {
         const style = document.createElement('style');
-
         let cb_background = '#f2f5ff',
             cb_background_dark = '#363636',
             cb_font_active = '#1b1b1b',
             cb_marking_clr = '#d5d5d5',
             text_shadow = '255,255,255';
-
         const bouncy_transition = 'cubic-bezier(0.25, 1, 0.5, 1.15)',
               bouncy_switch_transition = 'cubic-bezier(0.25, 1, 0.5, 1.55)';
-
         const settingStyles = () => {
         style.textContent = `
             :root {
@@ -400,9 +388,6 @@
             }
             .cb_container .cb_settings .cb_sup_deleter_btn {
                 right: calc((5px * 3) + (15px * 4));
-            }
-            .cb_container .cb_settings .cb_icon_map_generator_deleter_btn {
-                right: calc((5px * 4) + (15px * 5));
             }
             .cb_container .cb_settings .settings_title {
                 font-size: 14px;
@@ -902,7 +887,6 @@
                 <span class="cb_ls_deleter_btn glyphicon glyphicon-edit" title="Lokalen Speicher verwalten"><span></span></span>
                 <span class="cb_user_deleter_btn glyphicon glyphicon-user" title="Userdaten verwalten"><span></span></span>
                 <span class="cb_sup_deleter_btn glyphicon glyphicon-comment" title="Support schreiben"><span></span></span>
-                <a class="cb_icon_map_generator_deleter_btn glyphicon glyphicon-refresh" title="Icon Map Generator öffnen" href="https://kkorkmaz-demosite-com.wd5.securewebdemo.net/icon-map-generator" title="Icon Map Generator öffnen" target="_blank"></a>
 
                 <span class="settings_title">Settings</span>
 

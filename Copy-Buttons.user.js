@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Copy-Buttons
 // @namespace    https://github.com/zentolik
-// @version      0.92
+// @version      0.94
 // @description  doing stuff ʕ·͡ᴥ·ʔ
 // @author       Zentolik
 // @match        https://ipsi.securewebsystems.net/project/detailed/*
@@ -13,7 +13,7 @@
 
 !(function() { // ʕ·͡ᴥ·ʔ hi & ty <3
     'use strict';
-    console.log('ʕ·͡ᴥ·ʔ *bup* v0.92');
+    console.log('ʕ·͡ᴥ·ʔ *bup* v0.94');
     let settings = {
         button_position: true, // ändert die position vom btn (wenn auf "false", empfähle ich "copy_icon" zu aktivieren") //
         button_position_space: '20px', // Abstand vom Button nach unten und rechts //
@@ -27,6 +27,7 @@
         default_email_client: 'browser',
         department: '',
         user: '',
+        user_email: '',
     };
 
     const selectors = { // Attribute, zum selektieren der Container
@@ -258,9 +259,9 @@
         showNotification(text);
     };
 
-    const showNotification = (message) => {
+    const showNotification = (message, type = 'success') => {
         const notification = document.createElement('div');
-        notification.className = 'label label-success';
+        notification.className = `label label-${type}`;
         notification.textContent = message;
         Object.assign(notification.style, {
             position: 'fixed', right: '20px', zIndex: '999', opacity: '0', transition: '0.5s ease'
@@ -282,7 +283,7 @@
                 notifications = notifications.filter(n => n !== notification);
                 notifications.forEach((n, index) => n.style.bottom = `calc(${index * 18}px + ${bottomValue})`);
             });
-        }, 1250);
+        }, 5000);
     };
 
     const openFolderButton = (server, id) => {
@@ -334,6 +335,9 @@
             }
             .cb_btn, .setting_title, .box, .popup_btn, .color_picker label {
                 cursor: pointer;
+            }
+            .table .btn.cb_formix_check_btn {
+                margin-right: .5rem;
             }
             .cb_container {
                 order: 999;
@@ -388,6 +392,9 @@
             }
             .cb_container .cb_settings .cb_sup_deleter_btn {
                 right: calc((5px * 3) + (15px * 4));
+            }
+            .cb_container .cb_settings .cb_git_updater_deleter_btn {
+                right: calc((5px * 4) + (15px * 5));
             }
             .cb_container .cb_settings .settings_title {
                 font-size: 14px;
@@ -832,6 +839,9 @@
 
                         <label for="cb_user_lastname">Nachname</label>
                         <input type="text" id="cb_user_lastname" placeholder="Dein Nachname" />
+
+                        <label for="cb_user_email">E-Mail <span style="opacity:.6;font-size:.85em">(nur vor @)</span></label>
+                        <input type="text" id="cb_user_email" placeholder="z.B. max.mustermann" />
                       </div>
 
                       <div class="cb_department_container">
@@ -887,6 +897,7 @@
                 <span class="cb_ls_deleter_btn glyphicon glyphicon-edit" title="Lokalen Speicher verwalten"><span></span></span>
                 <span class="cb_user_deleter_btn glyphicon glyphicon-user" title="Userdaten verwalten"><span></span></span>
                 <span class="cb_sup_deleter_btn glyphicon glyphicon-comment" title="Support schreiben"><span></span></span>
+                <a class="cb_git_updater_deleter_btn glyphicon glyphicon-refresh" title="Jetzt Ipsi-Buttons updaten" href="https://github.com/zentolik/ipsi-buttons/raw/main/Copy-Buttons.user.js" target="_blank"></a>
 
                 <span class="settings_title">Settings</span>
 
@@ -1299,8 +1310,12 @@
                 const lastname = document.getElementById("cb_user_lastname").value.trim();
                 const user = [firstname, lastname].filter(Boolean).join(', ');
 
+                const emailInput = document.getElementById("cb_user_email");
+                const user_email = emailInput.value.replace(/@.*/g, '').trim(); // nur Teil vor @
+
                 if (department) settings.department = department;
                 if (user) settings.user = user;
+                settings.user_email = user_email; // auch leeren Wert speichern (löschen möglich)
 
                 localStorage.setItem('settings', JSON.stringify(settings));
 
@@ -1308,6 +1323,9 @@
 
                 // Popup schließen
                 document.querySelector('.cb_user_container')?.classList.remove('open');
+                setTimeout(function (){
+                    cb_container.classList.toggle('open');
+                }, 225);
             });
 
             // Vorbelegung laden
@@ -1327,6 +1345,19 @@
                 document.getElementById("cb_user_firstname").value = first;
                 document.getElementById("cb_user_lastname").value = last;
             }
+
+            // E-Mail-Vorbelegung und @-Filter
+            const emailInput = document.getElementById("cb_user_email");
+            if (settings.user_email) {
+                emailInput.value = settings.user_email;
+            }
+            emailInput.addEventListener('input', function () {
+                // @ und alles danach sofort entfernen
+                this.value = this.value.replace(/@.*/g, '');
+            });
+            emailInput.addEventListener('keydown', function (e) {
+                if (e.key === '@') e.preventDefault();
+            });
 
         })();
 
@@ -1619,6 +1650,560 @@
             }
         });
     };
+
+    // formixTable: Sandbox-Schnellbutton
+    function injectFormixButtons() {
+        const rows = document.querySelectorAll('table#formixTable > tbody > tr');
+        rows.forEach(row => {
+            const firstTd = row.querySelector('td:first-child');
+            if (!firstTd || firstTd.querySelector('.cb_formix_check_btn')) return; // bereits vorhanden
+
+            const btn = document.createElement('a');
+            btn.className = 'btn btn-info glyphicon glyphicon-check cb_formix_check_btn';
+            btn.title = 'Sandbox aktivieren & E-Mail eintragen';
+
+            btn.addEventListener('click', function (e) {
+                e.preventDefault();
+                e.stopPropagation();
+
+                const editLink = row.querySelector('a.btn.formixEdit');
+                if (!editLink) return;
+
+                // formixEdit-Link anklicken
+                editLink.click();
+
+                // Warten, bis #formixModal die Klasse "in" bekommt
+                const modalEl = document.querySelector('#formixModal');
+                if (!modalEl) return;
+
+                const observer = new MutationObserver(function (mutations, obs) {
+                    if (!modalEl.classList.contains('in')) return;
+                    obs.disconnect();
+
+                    // ── 1) Sandbox-Checkbox togglen ──────────────────────────
+                    const sandboxCb = modalEl.querySelector('.form-Group [type="checkbox"][name="sandbox"]')
+                                   || modalEl.querySelector('[type="checkbox"][name="sandbox"]');
+
+                    if (sandboxCb) {
+                        const wasChecked = sandboxCb.checked;
+                        sandboxCb.checked = !wasChecked;
+                        sandboxCb.dispatchEvent(new Event('change', { bubbles: true }));
+                        showNotification(
+                            sandboxCb.checked
+                                ? '✔ Sandbox aktiviert'
+                                : '✘ Sandbox deaktiviert'
+                        );
+                    } else {
+                        showNotification('Sandbox-Checkbox nicht gefunden', 'danger');
+                    }
+
+                    // ── 2) Sandbox-E-Mail befüllen ───────────────────────────
+                    const sandboxEmailInput = modalEl.querySelector('.form-Group [type="text"][name="sandbox_email"]')
+                                           || modalEl.querySelector('[type="text"][name="sandbox_email"]');
+
+                    if (sandboxEmailInput) {
+                        const storedSettings = JSON.parse(localStorage.getItem('settings') || '{}');
+                        const userEmailPrefix = storedSettings.user_email || '';
+
+                        if (userEmailPrefix) {
+                            const emailValue = userEmailPrefix + '@ew.de';
+                            sandboxEmailInput.value = emailValue;
+                            sandboxEmailInput.dispatchEvent(new Event('input',  { bubbles: true }));
+                            sandboxEmailInput.dispatchEvent(new Event('change', { bubbles: true }));
+                            showNotification(`E-Mail gesetzt: ${emailValue}`);
+                        } else {
+                            showNotification(
+                                'E-Mail nicht gesetzt – bitte zuerst eine E-Mail-Adresse in den Userdaten angeben',
+                                'danger'
+                            );
+                        }
+                    } else {
+                        showNotification('Sandbox-E-Mail-Feld nicht gefunden', 'danger');
+                    }
+
+                    setTimeout(() => modalEl.querySelector('#formixSave')?.click(), 5);
+                    setTimeout(() => modalEl.querySelector('button.close')?.click(), 150);
+                    setTimeout(() => (document.querySelector('#loadingModal.loadingOverlay').style.display = 'none'), 300);
+                });
+
+                observer.observe(modalEl, { attributes: true, attributeFilter: ['class'] });
+
+                // Sicherheits-Timeout: Observer nach 10 s wieder entfernen
+                setTimeout(() => observer.disconnect(), 10000);
+            });
+
+            firstTd.prepend(btn);
+        });
+    }
+
+    // Initial + dynamisch (falls Tabelle per AJAX nachgeladen wird)
+    injectFormixButtons();
+    const formixObserver = new MutationObserver(() => injectFormixButtons());
+    const formixTableParent = document.querySelector('table#formixTable')?.parentElement || document.body;
+    formixObserver.observe(formixTableParent, { childList: true, subtree: true });
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // ─── Orga-Button & Modal ──────────────────────────────────────────────────
+    (function setupOrgaFeature() {
+        const ORGA_MODAL_ID  = 'manage-project-note-orga';
+        const ORGA_BTN_ID    = 'manage-project-note-orga-trigger';
+
+        const DEFAULT_ROWS = [
+            { label: 'Layout',     date: '', status: '📁 offen', delay: '' },
+            { label: 'Erstellung', date: '', status: '📁 offen', delay: '' },
+            { label: 'Befüllung',  date: '', status: '📁 offen', delay: '' },
+            { label: 'FS',         date: '', status: '📁 offen', delay: '' },
+        ];
+
+        // ── CSS ────────────────────────────────────────────────────────────
+        const orgaStyle = document.createElement('style');
+        orgaStyle.textContent = `
+            body:has(${ORGA_MODAL_ID}) { overflow-y: hidden; }
+            #manage-project-note-orga-trigger { margin-right: 1.5em; }
+            #${ORGA_MODAL_ID} .orga-row {
+                display: flex;
+                align-items: center;
+                gap: 5px;
+                margin-bottom: 5px;
+                border: 1px solid rgba(0,0,0,0.1);
+                border-radius: 4px;
+                padding: 5px 7px;
+                transition: background-color .25s ease, border-color .25s ease;
+            }
+            #${ORGA_MODAL_ID} .orga-row:hover {
+                background-color: #f0f0f0;
+                border-color: rgba(0,0,0,0.2);
+            }
+            #${ORGA_MODAL_ID} .orga-row.dragging { opacity: 0.35; }
+            #${ORGA_MODAL_ID} .orga-drag-handle {
+                cursor: grab;
+                color: #bbb;
+                font-size: 15px;
+                padding: 0 2px;
+                user-select: none;
+            }
+            #${ORGA_MODAL_ID} .orga-label-input {
+                width: 95px;
+                font-weight: bold;
+                border: 1px solid transparent;
+                border-radius: 3px;
+                padding: 2px 4px;
+                background-color:
+                transparent;
+                cursor: pointer;
+            }
+            #${ORGA_MODAL_ID} .orga-label-input:focus,
+            #${ORGA_MODAL_ID} .orga-label-input:hover {
+                border-color: #337ab7;
+                background-color: #fff;
+                outline: none;
+                cursor: text;
+            }
+            #${ORGA_MODAL_ID} .orga-date-display {
+                color: #555;
+                cursor: pointer;
+                white-space: nowrap;
+                border: 1px solid transparent;
+                border-radius: 3px;
+                padding: 2px 4px;
+            }
+            #${ORGA_MODAL_ID} .orga-date-display:hover { border-color: #ccc; background-color: #fff; }
+            #${ORGA_MODAL_ID} .orga-date-input {
+                width: 115px;
+                border: 1px solid #ccc;
+                border-radius: 3px;
+                padding: 2px 4px;
+                font-size: 12px;
+            }
+            #${ORGA_MODAL_ID} .orga-status-select {
+                flex: 1;
+                border: 1px solid transparent;
+                border-radius: 3px;
+                padding: 2px 3px;
+                background-color: transparent;
+                cursor: pointer;
+            }
+            #${ORGA_MODAL_ID} .orga-status-select:focus,
+            #${ORGA_MODAL_ID} .orga-status-select:hover {
+                border-color: #337ab7;
+                background-color: #fff;
+                outline: none;
+            }
+            #${ORGA_MODAL_ID} .orga-delay-input {
+                width: 55px;
+                border: 1px solid #ccc;
+                border-radius: 3px;
+                padding: 2px 4px;
+                font-size: 12px;
+                background-color: transparent;
+            }
+            #${ORGA_MODAL_ID} .orga-delay-input:hover {
+                border-color: #337ab7;
+                background-color: #fff;
+                outline: none;
+            }
+            #${ORGA_MODAL_ID} .orga-sep {
+                color: #aaa;
+                font-weight: bold;
+                flex-shrink: 0; }
+            #${ORGA_MODAL_ID} .orga-btn-add,
+            #${ORGA_MODAL_ID} .orga-btn-rem {
+                flex-shrink: 0;
+                border: none;
+                padding: 1px 7px;
+                cursor: pointer;
+                font-size: 15px;
+                line-height: 1.3;
+            }
+            #${ORGA_MODAL_ID} [class*="orga-"]:focus {
+                border-color: #337ab7 !important;
+                background-color: #fff;
+                outline: none;
+            }
+            #${ORGA_MODAL_ID} .orga-drop-indicator {
+                height: 3px;;
+                background-color: #337ab7;
+                border-radius: 2px;
+                margin: 2px 0;
+                pointer-events: none;
+            }
+            .orga-backdrop {
+                position: fixed; inset: 0;
+                background-color: rgba(0,0,0,.5);
+                z-index: 1040;
+            }
+            #${ORGA_MODAL_ID} {
+                z-index: 1050;
+            }
+        `;
+        document.head.appendChild(orgaStyle);
+
+        // ── Hilfsfunktionen ────────────────────────────────────────────────
+        function formatDate(isoValue) {
+            if (!isoValue) return new Date().toLocaleDateString("uk-Uk", { year: "numeric", month: "2-digit", day: "2-digit", });
+            const [y, m, d] = isoValue.split('-');
+            return `${d}.${m}.${y}`;
+        }
+
+        function buildRowText(row) {
+            const label  = row.querySelector('.orga-label-input').value.trim() || 'CUSTOM';
+            const date   = formatDate(row.querySelector('.orga-date-input').value);
+            const sel    = row.querySelector('.orga-status-select');
+            let   status = sel.value;
+            if (status === '🕒 verzögert') {
+                const delay = (row.querySelector('.orga-delay-input')?.value || '').trim() || 'XY';
+                status = `🕒 verzögert durch ${delay}`;
+            }
+            return `${label} » ${date} » ${status}`;
+        }
+
+        // ── Drag-and-Drop ──────────────────────────────────────────────────
+        let dragSrc = null;
+
+        function getRowAfterY(rows, y) {
+            return rows.find(row => {
+                const rect = row.getBoundingClientRect();
+                return y < rect.top + rect.height / 2;
+            }) || null;
+        }
+
+        function setupContainerDrag(container) {
+            container.addEventListener('dragover', e => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+
+                // Alten Indikator entfernen
+                container.querySelector('.orga-drop-indicator')?.remove();
+
+                const rows = [...container.querySelectorAll('.orga-row:not(.dragging)')];
+                const indicator = document.createElement('div');
+                indicator.className = 'orga-drop-indicator';
+
+                const afterRow = getRowAfterY(rows, e.clientY);
+                if (afterRow) {
+                    container.insertBefore(indicator, afterRow);
+                } else {
+                    container.appendChild(indicator);
+                }
+            });
+
+            container.addEventListener('dragleave', e => {
+                if (!container.contains(e.relatedTarget)) {
+                    container.querySelector('.orga-drop-indicator')?.remove();
+                }
+            });
+
+            container.addEventListener('drop', e => {
+                e.preventDefault();
+                const indicator = container.querySelector('.orga-drop-indicator');
+                if (indicator && dragSrc) {
+                    container.insertBefore(dragSrc, indicator);
+                }
+                indicator?.remove();
+            });
+        }
+
+        function setupDrag(row) {
+            row.setAttribute('draggable', 'true');
+            row.addEventListener('dragstart', e => {
+                dragSrc = row;
+                row.classList.add('dragging');
+                e.dataTransfer.effectAllowed = 'move';
+            });
+            row.addEventListener('dragend', () => {
+                dragSrc = null;
+                row.classList.remove('dragging');
+                row.closest('#orga-rows-container')
+                    ?.querySelector('.orga-drop-indicator')?.remove();
+            });
+        }
+
+        // ── Zeile erstellen ────────────────────────────────────────────────
+        function createRow(container, data = {}) {
+            const row = document.createElement('div');
+            row.className = 'orga-row';
+
+            const label  = data.label  ?? 'CUSTOM';
+            const date   = data.date   ?? '';
+            const status = data.status ?? '📁 offen';
+            const delay  = data.delay  ?? '';
+            const isDelay = status.startsWith('🕒');
+
+            // Datum-Display / Input
+            const dateDisplay = document.createElement('span');
+            dateDisplay.className = 'orga-date-display';
+            dateDisplay.title = 'Datum auswählen';
+            dateDisplay.textContent = formatDate(date);
+
+            const dateInput = document.createElement('input');
+            dateInput.type = 'date';
+            dateInput.className = 'orga-date-input';
+            dateInput.value = date;
+            dateInput.style.display = 'none';
+
+            dateDisplay.addEventListener('click', () => {
+                dateDisplay.style.display = 'none';
+                dateInput.style.display   = 'inline-block';
+                dateInput.focus();
+            });
+            dateInput.addEventListener('change', () => {
+                dateDisplay.textContent   = formatDate(dateInput.value);
+                dateInput.style.display   = 'none';
+                dateDisplay.style.display = 'inline-block';
+            });
+            dateInput.addEventListener('blur', () => {
+                dateInput.style.display   = 'none';
+                dateDisplay.style.display = 'inline-block';
+            });
+
+            // Status-Select
+            const statusSelect = document.createElement('select');
+            statusSelect.className = 'orga-status-select';
+            [
+                ['📁 offen',       '📁 offen'],
+                ['⚙️ i.B.',        '⚙️ i.B.'],
+                ['✅ done',         '✅ done'],
+                ['❌ abgebrochen',  '❌ abgebrochen'],
+                ['🕒 verzögert',   '🕒 verzögert durch...'],
+            ].forEach(([val, txt]) => {
+                const opt = document.createElement('option');
+                opt.value = val;
+                opt.textContent = txt;
+                if (isDelay ? val === '🕒 verzögert' : val === status) opt.selected = true;
+                statusSelect.appendChild(opt);
+            });
+
+            // Delay-Input
+            const delayInput = document.createElement('input');
+            delayInput.type = 'text';
+            delayInput.className = 'orga-delay-input';
+            delayInput.value = delay;
+            delayInput.style.display = isDelay ? 'inline-block' : 'none';
+
+            statusSelect.addEventListener('change', () => {
+                delayInput.style.display = statusSelect.value === '🕒 verzögert' ? 'inline-block' : 'none';
+            });
+
+            // Buttons
+            const addBtn = document.createElement('button');
+            addBtn.className = 'orga-btn-add btn btn-success';
+            addBtn.textContent = '+';
+            addBtn.title = 'Zeile darunter einfügen';
+            addBtn.addEventListener('click', () => {
+                const newRow = createRow(container);
+                row.after(newRow);
+            });
+
+            const remBtn = document.createElement('button');
+            remBtn.className = 'orga-btn-rem btn btn-danger';
+            remBtn.textContent = '−';
+            remBtn.title = 'Zeile entfernen';
+            remBtn.addEventListener('click', () => row.remove());
+
+            // Zusammenbauen
+            const handle = document.createElement('span');
+            handle.className = 'orga-drag-handle';
+            handle.textContent = '⠿';
+            handle.title = 'Verschieben';
+
+            const labelInput = document.createElement('input');
+            labelInput.type = 'text';
+            labelInput.className = 'orga-label-input';
+            labelInput.value = label;
+            labelInput.title = 'Bezeichnung bearbeiten';
+
+            const sep1 = document.createElement('span');
+            sep1.className = 'orga-sep';
+            sep1.textContent = '»';
+
+            const sep2 = document.createElement('span');
+            sep2.className = 'orga-sep';
+            sep2.textContent = '»';
+
+            row.append(handle, labelInput, sep1, dateDisplay, dateInput, sep2, statusSelect, delayInput, addBtn, remBtn);
+            setupDrag(row);
+            return row;
+        }
+
+        // ── Modal öffnen ───────────────────────────────────────────────────
+        function openOrgaModal(newNoteBtn) {
+            if (document.getElementById(ORGA_MODAL_ID)) return; // bereits offen
+
+            const backdrop = document.createElement('div');
+            backdrop.className = 'orga-backdrop';
+            document.body.appendChild(backdrop);
+
+            const modal = document.createElement('div');
+            modal.id = ORGA_MODAL_ID;
+            modal.className = 'modal fade';   // noch OHNE "in"
+            modal.tabIndex = -1;
+            modal.style.cssText = 'display:block; padding-right:17px;';
+            modal.innerHTML = `
+                <div class="modal-dialog">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <button type="button" class="close" id="orga-close-x">×</button>
+                            <h4 class="modal-title">Projektnotiz: Organisation</h4>
+                        </div>
+                        <div class="modal-body" id="orga-rows-container"></div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-primary" id="orga-save-btn">Speichern</button>
+                            <button type="button" class="btn btn-default" id="orga-cancel-btn">Abbrechen</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+
+            // "in" nach 200 ms → CSS-Transition greift
+            setTimeout(() => modal.classList.add('in'), 200);
+
+            const rowsContainer = modal.querySelector('#orga-rows-container');
+            DEFAULT_ROWS.forEach(data => rowsContainer.appendChild(createRow(rowsContainer, data)));
+            setupContainerDrag(rowsContainer);  // Container-Drag registrieren
+
+            function closeModal() {
+                modal.classList.remove('in');
+                setTimeout(() => {
+                    modal.remove();
+                    backdrop.remove();
+                }, 200);
+            }
+
+            modal.querySelector('#orga-close-x').addEventListener('click',  closeModal);
+            modal.querySelector('#orga-cancel-btn').addEventListener('click', closeModal);
+            backdrop.addEventListener('click', closeModal);
+
+            // Klick direkt auf den Modal-Hintergrund (nicht auf den Dialog) schließt auch
+            modal.addEventListener('click', e => {
+                if (e.target === modal) closeModal();
+            });
+
+            // ── Speichern ──────────────────────────────────────────────────
+            modal.querySelector('#orga-save-btn').addEventListener('click', () => {
+                const rows = rowsContainer.querySelectorAll('.orga-row');
+                const lines = Array.from(rows).map(r => buildRowText(r)).join('\n');
+
+                closeModal();
+
+                // 1) Neuen-Notiz-Dialog öffnen
+                newNoteBtn.click();
+
+                const noteModal = document.querySelector('#manage-project-note');
+                if (!noteModal) return;
+
+                const noteObs = new MutationObserver((_, obs) => {
+                    if (!noteModal.classList.contains('in')) return;
+                    obs.disconnect();
+
+                    // 2) verifyType auf "organisation" setzen
+                    const verifySelect = noteModal.querySelector('[name="verifyType"]');
+                    if (verifySelect) {
+                        verifySelect.value = 'organisation';
+                        verifySelect.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+
+                    // 3) Text in den iframe-Editor einfügen
+                    setTimeout(() => {
+                        const editorIframe = noteModal.querySelector('[id*="project-note-editor"]');
+                        if (!editorIframe) return;
+                        try {
+                            const doc = editorIframe.contentDocument
+                                     || editorIframe.contentWindow?.document;
+                            if (!doc) return;
+                            doc.body.focus();
+                            // Alles selektieren und Text einsetzen (funktioniert in den meisten RTE-iframes)
+                            doc.execCommand('selectAll', false, null);
+                            const html = lines
+                                .split('\n')
+                                .map(l => `<p>${l}</p><br>`)
+                                .join('');
+                            const inserted = doc.execCommand('insertHTML', false, html);
+                            if (!inserted) {
+                                // Fallback: direkt ins body schreiben
+                                doc.body.innerHTML = html;
+                                doc.body.dispatchEvent(new Event('input', { bubbles: true }));
+                            }
+                        } catch (err) {
+                            console.warn('[Orga] Editor-Insert fehlgeschlagen:', err);
+                        }
+                    }, 450);
+                });
+
+                noteObs.observe(noteModal, { attributes: true, attributeFilter: ['class'] });
+                setTimeout(() => noteObs.disconnect(), 10000);
+            });
+        }
+
+        // ── Orga-Button in die Seite injizieren ────────────────────────────
+        function injectOrgaButton() {
+            if (document.getElementById(ORGA_BTN_ID)) return;
+
+            const newNoteBtn = document.querySelector('#manage-note-dialog-project-new');
+            if (!newNoteBtn) return;
+
+            const targetContainer = newNoteBtn.closest('.col-sm-6') || newNoteBtn.parentElement;
+            if (!targetContainer) return;
+
+            const orgaBtn = document.createElement('a');
+            orgaBtn.id        = ORGA_BTN_ID;
+            orgaBtn.className = 'btn btn-info';
+            orgaBtn.textContent = 'Orga';
+            orgaBtn.href = '#';
+            orgaBtn.addEventListener('click', e => {
+                e.preventDefault();
+                openOrgaModal(newNoteBtn);
+            });
+
+            targetContainer.prepend(orgaBtn);
+        }
+
+        // Sofort versuchen + bei DOM-Änderungen erneut prüfen
+        injectOrgaButton();
+        const orgaObserver = new MutationObserver(injectOrgaButton);
+        orgaObserver.observe(document.body, { childList: true, subtree: true });
+    })();
+    // ─────────────────────────────────────────────────────────────────────────
 
     const intervalId = setInterval(checkForElement, 500);
 })();

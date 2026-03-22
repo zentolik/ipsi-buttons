@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Copy-Buttons
 // @namespace    https://github.com/zentolik
-// @version      0.94
+// @version      0.95
 // @description  doing stuff ʕ·͡ᴥ·ʔ
 // @author       Zentolik
 // @match        https://ipsi.securewebsystems.net/project/detailed/*
@@ -13,7 +13,8 @@
 
 !(function() { // ʕ·͡ᴥ·ʔ hi & ty <3
     'use strict';
-    console.log('ʕ·͡ᴥ·ʔ *bup* v0.94');
+    const SCRIPT_VERSION = '0.95';
+    console.log(`ʕ·͡ᴥ·ʔ *bup* v${SCRIPT_VERSION}`);
     let settings = {
         button_position: true, // ändert die position vom btn (wenn auf "false", empfähle ich "copy_icon" zu aktivieren") //
         button_position_space: '20px', // Abstand vom Button nach unten und rechts //
@@ -405,6 +406,21 @@
                 color: var(--cb_font);
                 margin-right: -12px;
                 margin-bottom: 8px;
+                user-select: none;
+                -moz-user-select: -moz-none;
+                -khtml-user-select: none;
+                -webkit-user-select: none;
+                -ms-user-select: none;
+            }
+            .cb_container .cb_settings .cb_version {
+                font-size: 13px;
+                font-family: sans-serif;
+                font-weight: bolder;
+                position: absolute;
+                bottom: 12px;
+                right: 15px;
+                color: var(--cb_font);
+                opacity: 0.65;
                 user-select: none;
                 -moz-user-select: -moz-none;
                 -khtml-user-select: none;
@@ -817,6 +833,8 @@
                 }
             }
             darkmode_btn.innerHTML = dark_mode_icon;
+            // Orga-Darkmode-Klasse auf body synchronisieren
+            // document.body.classList.toggle('cb_orga_darkmode', !!settings.darkmode);
         }
 
         cbContainer.innerHTML = `
@@ -900,6 +918,7 @@
                 <a class="cb_git_updater_deleter_btn glyphicon glyphicon-refresh" title="Jetzt Ipsi-Buttons updaten" href="https://github.com/zentolik/ipsi-buttons/raw/main/Copy-Buttons.user.js" target="_blank"></a>
 
                 <span class="settings_title">Settings</span>
+                <span class="cb_version">v${SCRIPT_VERSION}</span>
 
                 <div class="cb_setting">
                     <input type="checkbox" id="copy_work_button" name="work-pfad"/>
@@ -1708,7 +1727,7 @@
                         if (userEmailPrefix) {
                             const emailValue = userEmailPrefix + '@ew.de';
                             sandboxEmailInput.value = emailValue;
-                            sandboxEmailInput.dispatchEvent(new Event('input',  { bubbles: true }));
+                            sandboxEmailInput.dispatchEvent(new Event('input', { bubbles: true }));
                             sandboxEmailInput.dispatchEvent(new Event('change', { bubbles: true }));
                             showNotification(`E-Mail gesetzt: ${emailValue}`);
                         } else {
@@ -1721,9 +1740,57 @@
                         showNotification('Sandbox-E-Mail-Feld nicht gefunden', 'danger');
                     }
 
-                    setTimeout(() => modalEl.querySelector('#formixSave')?.click(), 5);
-                    setTimeout(() => modalEl.querySelector('button.close')?.click(), 150);
-                    setTimeout(() => (document.querySelector('#loadingModal.loadingOverlay').style.display = 'none'), 300);
+                    // Nur speichern wenn mind. Checkbox oder E-Mail erfolgreich gesetzt wurde
+                    const cbFound = !!modalEl.querySelector('.form-Group [type="checkbox"][name="sandbox"]')
+                                    || !!modalEl.querySelector('[type="checkbox"][name="sandbox"]');
+                    const emailFound = !!modalEl.querySelector('.form-Group [type="text"][name="sandbox_email"]')
+                                    || !!modalEl.querySelector('[type="text"][name="sandbox_email"]');
+
+                    if (!cbFound && !emailFound) return; // nichts zum Speichern
+
+                    // ── 3) Speichern ─────────────────────────────────────────
+                    modalEl.querySelector('#formixSave')?.click();
+
+                    // ── 4) Warten auf "Form saved"-Alert im #formixBody ──────
+                    const formixBody = modalEl.querySelector('#formixBody') || modalEl;
+                    const savedObs = new MutationObserver((_, sObs) => {
+                        const alert = formixBody.querySelector('.alert.alert-success');
+                        if (!alert || !alert.textContent.includes('Form saved')) return;
+                        sObs.disconnect();
+
+                        // ── 5) Modal schließen ────────────────────────────────
+                        modalEl.querySelector('button.close')?.click();
+
+                        // ── 6) Warten bis #loadingModal display:block > 3 s ──
+                        const loadingModal = document.querySelector('#loadingModal');
+                        if (!loadingModal) return;
+
+                        let blockSince = null;
+                        const loadingObs = new MutationObserver(() => {
+                            const isBlock = loadingModal.style.display === 'block';
+                            if (isBlock && blockSince === null) {
+                                blockSince = Date.now();
+                            } else if (!isBlock) {
+                                blockSince = null;
+                            }
+                        });
+                        loadingObs.observe(loadingModal, { attributes: true, attributeFilter: ['style'] });
+
+                        const isBlock = loadingModal.style.display === 'block';
+                        if (isBlock) {
+                                loadingModal.style.display = 'none';
+                        }
+
+                        // Sicherheits-Timeout nach 30 s
+                        setTimeout(() => {
+                            clearInterval(loadingCheck);
+                            loadingObs.disconnect();
+                        }, 30000);
+                    });
+                    savedObs.observe(formixBody, { childList: true, subtree: true });
+
+                    // Sicherheits-Timeout für savedObs nach 15 s
+                    setTimeout(() => savedObs.disconnect(), 15000);
                 });
 
                 observer.observe(modalEl, { attributes: true, attributeFilter: ['class'] });
@@ -1745,21 +1812,36 @@
 
     // ─── Orga-Button & Modal ──────────────────────────────────────────────────
     (function setupOrgaFeature() {
-        const ORGA_MODAL_ID  = 'manage-project-note-orga';
-        const ORGA_BTN_ID    = 'manage-project-note-orga-trigger';
+        const ORGA_MODAL_ID = 'manage-project-note-orga';
+        const ORGA_BTN_ID = 'manage-project-note-orga-trigger';
+        const ORGA_EDIT_BTN_ID = 'manage-project-note-orga-edit';
 
         const DEFAULT_ROWS = [
-            { label: 'Layout',     date: '', status: '📁 offen', delay: '' },
-            { label: 'Erstellung', date: '', status: '📁 offen', delay: '' },
-            { label: 'Befüllung',  date: '', status: '📁 offen', delay: '' },
-            { label: 'FS',         date: '', status: '📁 offen', delay: '' },
+            { label: 'Layout', dates: [''], status: '📁 offen', delay: '' },
+            { label: 'Erstellung', dates: [''], status: '📁 offen', delay: '' },
+            { label: 'Befüllung', dates: [''], status: '📁 offen', delay: '' },
+            { label: 'FS', dates: [''], status: '📁 offen', delay: '' },
+        ];
+
+        const ZT_ROWS = [
+            { label: 'ZT-Änderungen', dates: [''], status: '📁 offen', delay: '' },
+            { label: 'OS', dates: [''], status: '📁 offen', delay: '' },
+            { label: 'FS', dates: [''], status: '📁 offen', delay: '' },
         ];
 
         // ── CSS ────────────────────────────────────────────────────────────
         const orgaStyle = document.createElement('style');
         orgaStyle.textContent = `
-            body:has(${ORGA_MODAL_ID}) { overflow-y: hidden; }
-            #manage-project-note-orga-trigger { margin-right: 1.5em; }
+            body:has(#${ORGA_MODAL_ID}) { overflow-y: hidden; }
+            *:has(>#${ORGA_BTN_ID}):not(:has(#${ORGA_BTN_ID} + #${ORGA_EDIT_BTN_ID})) > #${ORGA_BTN_ID},
+            #${ORGA_EDIT_BTN_ID} {
+                margin-right: 1.5em;
+            }
+            #${ORGA_MODAL_ID} .modal-dialog,
+            #${ORGA_MODAL_ID} .modal-dialog .modal-content,
+            #${ORGA_MODAL_ID} .modal-dialog .modal-content #orga-rows-container{
+                width: fit-content;
+            }
             #${ORGA_MODAL_ID} .orga-row {
                 display: flex;
                 align-items: center;
@@ -1783,7 +1865,8 @@
                 user-select: none;
             }
             #${ORGA_MODAL_ID} .orga-label-input {
-                width: 95px;
+                field-sizing: content;
+                min-width: 95px;
                 font-weight: bold;
                 border: 1px solid transparent;
                 border-radius: 3px;
@@ -1800,6 +1883,9 @@
                 cursor: text;
             }
             #${ORGA_MODAL_ID} .orga-date-display {
+                display: inline-flex;
+                align-items: center;
+                gap: 3px;
                 color: #555;
                 cursor: pointer;
                 white-space: nowrap;
@@ -1808,6 +1894,11 @@
                 padding: 2px 4px;
             }
             #${ORGA_MODAL_ID} .orga-date-display:hover { border-color: #ccc; background-color: #fff; }
+            #${ORGA_MODAL_ID} .orga-date-display .orga-date-cal-icon {
+                font-size: 11px;
+                opacity: .55;
+                pointer-events: none;
+            }
             #${ORGA_MODAL_ID} .orga-date-input {
                 width: 115px;
                 border: 1px solid #ccc;
@@ -1830,7 +1921,8 @@
                 outline: none;
             }
             #${ORGA_MODAL_ID} .orga-delay-input {
-                width: 55px;
+                field-sizing: content;
+                min-width: 55px;
                 border: 1px solid #ccc;
                 border-radius: 3px;
                 padding: 2px 4px;
@@ -1867,6 +1959,49 @@
                 margin: 2px 0;
                 pointer-events: none;
             }
+            #${ORGA_MODAL_ID} .orga-dates-container {
+                display: inline-flex;
+                align-items: center;
+                flex-wrap: nowrap;
+                gap: 2px;
+            }
+            #${ORGA_MODAL_ID} .orga-date-slot {
+                display: inline-flex;
+                align-items: center;
+                gap: 2px;
+            }
+            #${ORGA_MODAL_ID} .orga-date-add-btn,
+            #${ORGA_MODAL_ID} .orga-date-rem-btn {
+                display: none; /* shown by refreshRemBtns / always for add */
+                justify-content: center;
+                align-items: center;
+                width: 16px;
+                height: 16px;
+                flex-shrink: 0;
+                cursor: pointer;
+                font-size: 10px;
+                line-height: 1;
+                padding: 0;
+                border-radius: 3px;
+            }
+            #${ORGA_MODAL_ID} .orga-date-add-btn {
+                display: flex; /* always visible */
+            }
+            #${ORGA_MODAL_ID} .orga-date-display:hover .orga-date-add-btn,
+            #${ORGA_MODAL_ID} .orga-date-display:hover .orga-date-rem-btn {
+                display: flex;
+            }
+            #orga-note-picker .orga-picker-item {
+                display: block;
+                width: 100%;
+                text-align: left;
+                border: none;
+                border-bottom: 1px solid #e5e5e5;
+                border-radius: 0;
+                padding: 10px 15px;
+            }
+            #orga-note-picker .orga-picker-item:hover { background: #f5f5f5; }
+            #orga-note-picker .orga-picker-item:last-child { border-bottom: none; }
             .orga-backdrop {
                 position: fixed; inset: 0;
                 background-color: rgba(0,0,0,.5);
@@ -1874,6 +2009,54 @@
             }
             #${ORGA_MODAL_ID} {
                 z-index: 1050;
+            }
+            /* ── Darkmode ── */
+            .cb_orga_darkmode #${ORGA_MODAL_ID} .orga-date-input {
+                color-scheme: dark;
+            }
+            .cb_orga_darkmode #${ORGA_MODAL_ID} .orga-date-display {
+                color: #ccc;
+            }
+            .cb_orga_darkmode #${ORGA_MODAL_ID} .orga-date-display:hover {
+                border-color: #555;
+                background-color: #2e2e2e;
+            }
+            .cb_orga_darkmode #${ORGA_MODAL_ID} .orga-row:hover {
+                background-color: #2e2e2e;
+                border-color: rgba(255,255,255,0.15);
+            }
+            .cb_orga_darkmode #${ORGA_MODAL_ID} .orga-label-input,
+            .cb_orga_darkmode #${ORGA_MODAL_ID} .orga-delay-input {
+                color: #eaedf7;
+                background-color: transparent;
+            }
+            .cb_orga_darkmode #${ORGA_MODAL_ID} .orga-label-input:hover,
+            .cb_orga_darkmode #${ORGA_MODAL_ID} .orga-label-input:focus,
+            .cb_orga_darkmode #${ORGA_MODAL_ID} .orga-delay-input:hover {
+                background-color: #2e2e2e;
+                border-color: #555;
+            }
+            .cb_orga_darkmode #${ORGA_MODAL_ID} .orga-status-select {
+                color: #eaedf7;
+                background-color: transparent;
+            }
+            .cb_orga_darkmode #${ORGA_MODAL_ID} .orga-status-select:hover,
+            .cb_orga_darkmode #${ORGA_MODAL_ID} .orga-status-select:focus {
+                background-color: #2e2e2e;
+                border-color: #555;
+            }
+            .cb_orga_darkmode #${ORGA_MODAL_ID} .modal-content {
+                background-color: #1b1b1b;
+                color: #eaedf7;
+                border-color: #444;
+            }
+            .cb_orga_darkmode #${ORGA_MODAL_ID} .modal-header,
+            .cb_orga_darkmode #${ORGA_MODAL_ID} .modal-footer {
+                border-color: #444;
+            }
+            .cb_orga_darkmode #${ORGA_MODAL_ID} .modal-title,
+            .cb_orga_darkmode #${ORGA_MODAL_ID} .close {
+                color: #eaedf7;
             }
         `;
         document.head.appendChild(orgaStyle);
@@ -1885,16 +2068,93 @@
             return `${d}.${m}.${y}`;
         }
 
+        function isoFromDisplay(ddmmyyyy) {
+            if (!ddmmyyyy || !/^\d{2}\.\d{2}\.\d{4}$/.test(ddmmyyyy.trim())) return '';
+            const [d, m, y] = ddmmyyyy.trim().split('.');
+            return `${y}-${m}-${d}`;
+        }
+
         function buildRowText(row) {
-            const label  = row.querySelector('.orga-label-input').value.trim() || 'CUSTOM';
-            const date   = formatDate(row.querySelector('.orga-date-input').value);
-            const sel    = row.querySelector('.orga-status-select');
-            let   status = sel.value;
+            const label = row.querySelector('.orga-label-input').value.trim() || 'CUSTOM';
+            const dates = [...row.querySelectorAll('.orga-dates-container .orga-date-input')]
+                               .map(i => formatDate(i.value));
+            const sel = row.querySelector('.orga-status-select');
+            let status = sel.value;
             if (status === '🕒 verzögert') {
                 const delay = (row.querySelector('.orga-delay-input')?.value || '').trim() || 'XY';
                 status = `🕒 verzögert durch ${delay}`;
             }
-            return `${label} » ${date} » ${status}`;
+            return [label, ...dates, status].join(' » ');
+        }
+
+        // ── Orga-Notizen parsen & finden ───────────────────────────────────
+        function parseOrgaLines(html) {
+            const text = html
+                .replace(/<br\s*\/?>/gi, '\n')
+                .replace(/&nbsp;/g, ' ')
+                .replace(/<[^>]+>/g, '');
+            const lines = text.split('\n').map(l => l.trim()).filter(l => l.includes(' » '));
+
+            return lines.map(line => {
+                const parts = line.split(' » ').map(s => s.trim());
+                if (parts.length < 2) return null;
+
+                const label = parts[0];
+                const dateRegex = /^\d{2}\.\d{2}\.\d{4}$/;
+                const dates = [];
+                let statusStr = '';
+
+                for (let i = 1; i < parts.length; i++) {
+                    if (dateRegex.test(parts[i])) {
+                        dates.push(isoFromDisplay(parts[i]));
+                    } else {
+                        statusStr = parts.slice(i).join(' » ');
+                        break;
+                    }
+                }
+                if (!dates.length) dates.push('');
+
+                let status = '📁 offen', delay = '';
+                if (statusStr.startsWith('🕒')) {
+                    status = '🕒 verzögert';
+                    const m = statusStr.match(/verzögert durch (.+)/);
+                    delay = m ? m[1].trim() : '';
+                } else if (statusStr.startsWith('✅')) { status = '✅ done'; }
+                else if (statusStr.startsWith('⚙️')) { status = '⚙️ i.B.'; }
+                else if (statusStr.startsWith('❌')) { status = '❌ abgebrochen'; }
+                // else: 📁 offen (default)
+
+                return { label, dates, status, delay };
+            }).filter(Boolean);
+        }
+
+        function findOrgaNotes() {
+            const results = [];
+            document.querySelectorAll('table[id^="datagrid_table_"]').forEach(table => {
+                table.querySelectorAll('tbody tr').forEach(tr => {
+                    const cells = tr.querySelectorAll('td');
+                    if (cells.length < 5) return;
+                    if (!cells[3].textContent.trim().includes('Organisation')) return;
+                    const contentHtml = cells[4].innerHTML;
+                    if (!contentHtml.includes(' » ')) return;
+
+                    const editLink = cells[0].querySelector(
+                        'a[id^="manage-note-dialog-project-"]:not([id$="-new"])'
+                    );
+                    if (!editLink) return;
+
+                    const parsedLines = parseOrgaLines(contentHtml);
+                    if (!parsedLines.length) return;
+
+                    results.push({
+                        noteId: editLink.id,
+                        date:   cells[1]?.textContent.trim() || '',
+                        user:   cells[2]?.textContent.trim() || '',
+                        lines:  parsedLines,
+                    });
+                });
+            });
+            return results;
         }
 
         // ── Drag-and-Drop ──────────────────────────────────────────────────
@@ -1963,48 +2223,137 @@
             const row = document.createElement('div');
             row.className = 'orga-row';
 
-            const label  = data.label  ?? 'CUSTOM';
-            const date   = data.date   ?? '';
+            const label = data.label ?? 'CUSTOM';
+            // support both old `date: ''` and new `dates: []`
+            const dates = data.dates ?? (data.date !== undefined ? [data.date] : ['']);
             const status = data.status ?? '📁 offen';
-            const delay  = data.delay  ?? '';
-            const isDelay = status.startsWith('🕒');
+            const delay = data.delay ?? '';
+            const isDelay = status === '🕒 verzögert' || status.startsWith('🕒');
 
-            // Datum-Display / Input
-            const dateDisplay = document.createElement('span');
-            dateDisplay.className = 'orga-date-display';
-            dateDisplay.title = 'Datum auswählen';
-            dateDisplay.textContent = formatDate(date);
+            // ── Datum-Container mit ein oder mehreren Slots ────────────────
+            const datesContainer = document.createElement('span');
+            datesContainer.className = 'orga-dates-container';
 
-            const dateInput = document.createElement('input');
-            dateInput.type = 'date';
-            dateInput.className = 'orga-date-input';
-            dateInput.value = date;
-            dateInput.style.display = 'none';
+            function refreshRemBtns() {
+                const slots = datesContainer.querySelectorAll('.orga-date-slot');
+                slots.forEach(s => {
+                    const rb = s.querySelector('.orga-date-rem-btn');
+                    if (rb) rb.style.display = slots.length > 1 ? 'inline-block' : 'none';
+                });
+            }
 
-            dateDisplay.addEventListener('click', () => {
-                dateDisplay.style.display = 'none';
-                dateInput.style.display   = 'inline-block';
-                dateInput.focus();
-            });
-            dateInput.addEventListener('change', () => {
-                dateDisplay.textContent   = formatDate(dateInput.value);
-                dateInput.style.display   = 'none';
-                dateDisplay.style.display = 'inline-block';
-            });
-            dateInput.addEventListener('blur', () => {
-                dateInput.style.display   = 'none';
-                dateDisplay.style.display = 'inline-block';
-            });
+            function createDateSlot(isoDate, showLeadingSep) {
+                const slot = document.createElement('span');
+                slot.className = 'orga-date-slot';
 
-            // Status-Select
+                if (showLeadingSep) {
+                    const slotSep = document.createElement('span');
+                    slotSep.className = 'orga-sep orga-slot-sep';
+                    slotSep.textContent = '»';
+                    slot.appendChild(slotSep);
+                }
+
+                // ── display (flex container) ───────────────────────────────
+                const display = document.createElement('span');
+                display.className = 'orga-date-display';
+                display.title = 'Datum auswählen';
+
+                const dateTextNode = document.createElement('span');
+                dateTextNode.className = 'orga-date-text';
+                dateTextNode.textContent = formatDate(isoDate);
+
+                const calIcon = document.createElement('i');
+                calIcon.className = 'glyphicon glyphicon-calendar orga-date-cal-icon';
+
+                // ── rem-Button (inside display) ────────────────────────────
+                const remDateBtn = document.createElement('button');
+                remDateBtn.className = 'orga-date-rem-btn btn btn-default';
+                remDateBtn.textContent = '−';
+                remDateBtn.title = 'Datum entfernen';
+                remDateBtn.addEventListener('click', e => {
+                    e.stopPropagation();
+                    const slots = [...datesContainer.querySelectorAll('.orga-date-slot')];
+                    if (slots.length <= 1) return;
+                    slot.remove();
+                    const remaining = datesContainer.querySelectorAll('.orga-date-slot');
+                    remaining.forEach((s, i) => {
+                        const sep = s.querySelector('.orga-slot-sep');
+                        if (i === 0 && sep) sep.remove();
+                        else if (i > 0 && !sep) {
+                            const newSep = document.createElement('span');
+                            newSep.className = 'orga-sep orga-slot-sep';
+                            newSep.textContent = '»';
+                            s.prepend(newSep);
+                        }
+                    });
+                    refreshRemBtns();
+                });
+
+                // ── add-Button (inside display) ────────────────────────────
+                const addDateBtn = document.createElement('button');
+                addDateBtn.className = 'orga-date-add-btn btn btn-default';
+                addDateBtn.textContent = '+';
+                addDateBtn.title = 'Weiteres Datum hinzufügen';
+                addDateBtn.addEventListener('click', e => {
+                    e.stopPropagation();
+                    slot.after(createDateSlot('', true));
+                    refreshRemBtns();
+                });
+
+                display.append(calIcon, dateTextNode, remDateBtn, addDateBtn);
+
+                // ── date input (hidden, swapped with display on click) ─────
+                const input = document.createElement('input');
+                input.type = 'date';
+                input.className = 'orga-date-input';
+                input.value = isoDate;
+                input.style.display = 'none';
+
+                function hideInput() {
+                    input.style.display = 'none';
+                    display.style.display = 'inline-flex';
+                }
+
+                display.addEventListener('click', () => {
+                    display.style.display = 'none';
+                    input.style.display = 'inline-block';
+                    requestAnimationFrame(() => {
+                        try { input.showPicker(); } catch (_) { input.click(); }
+                    });
+                    // Außerhalb-Klick-Listener: schließt Input wenn woanders hingeklickt wird
+                    function onOutsideClick(e) {
+                        if (!input.contains(e.target) && !display.contains(e.target)) {
+                            hideInput();
+                            document.removeEventListener('mousedown', onOutsideClick, true);
+                        }
+                    }
+                    // Kurze Verzögerung damit der aktuelle Klick nicht direkt triggert
+                    setTimeout(() => {
+                        document.addEventListener('mousedown', onOutsideClick, true);
+                    }, 0);
+                });
+                input.addEventListener('change', () => {
+                    dateTextNode.textContent = formatDate(input.value);
+                    hideInput();
+                });
+
+                slot.append(display, input);
+                return slot;
+            }
+
+            dates.forEach((d, i) => datesContainer.appendChild(createDateSlot(d, i > 0)));
+
+            refreshRemBtns(); // initial visibility
+
+            // ── Status-Select ──────────────────────────────────────────────
             const statusSelect = document.createElement('select');
             statusSelect.className = 'orga-status-select';
             [
-                ['📁 offen',       '📁 offen'],
-                ['⚙️ i.B.',        '⚙️ i.B.'],
-                ['✅ done',         '✅ done'],
-                ['❌ abgebrochen',  '❌ abgebrochen'],
-                ['🕒 verzögert',   '🕒 verzögert durch...'],
+                ['📁 offen', '📁 offen'],
+                ['⚙️ i.B.', '⚙️ i.B.'],
+                ['✅ done', '✅ done'],
+                ['❌ abgebrochen', '❌ abgebrochen'],
+                ['🕒 verzögert', '🕒 verzögert durch...'],
             ].forEach(([val, txt]) => {
                 const opt = document.createElement('option');
                 opt.value = val;
@@ -2013,10 +2362,11 @@
                 statusSelect.appendChild(opt);
             });
 
-            // Delay-Input
+            // ── Delay-Input ────────────────────────────────────────────────
             const delayInput = document.createElement('input');
             delayInput.type = 'text';
             delayInput.className = 'orga-delay-input';
+            delayInput.placeholder = 'XY';
             delayInput.value = delay;
             delayInput.style.display = isDelay ? 'inline-block' : 'none';
 
@@ -2024,15 +2374,12 @@
                 delayInput.style.display = statusSelect.value === '🕒 verzögert' ? 'inline-block' : 'none';
             });
 
-            // Buttons
+            // ── Zeilen-Buttons ─────────────────────────────────────────────
             const addBtn = document.createElement('button');
             addBtn.className = 'orga-btn-add btn btn-success';
             addBtn.textContent = '+';
             addBtn.title = 'Zeile darunter einfügen';
-            addBtn.addEventListener('click', () => {
-                const newRow = createRow(container);
-                row.after(newRow);
-            });
+            addBtn.addEventListener('click', () => row.after(createRow(container)));
 
             const remBtn = document.createElement('button');
             remBtn.className = 'orga-btn-rem btn btn-danger';
@@ -2040,7 +2387,7 @@
             remBtn.title = 'Zeile entfernen';
             remBtn.addEventListener('click', () => row.remove());
 
-            // Zusammenbauen
+            // ── Zusammenbauen ──────────────────────────────────────────────
             const handle = document.createElement('span');
             handle.className = 'orga-drag-handle';
             handle.textContent = '⠿';
@@ -2060,14 +2407,14 @@
             sep2.className = 'orga-sep';
             sep2.textContent = '»';
 
-            row.append(handle, labelInput, sep1, dateDisplay, dateInput, sep2, statusSelect, delayInput, addBtn, remBtn);
+            row.append(handle, labelInput, sep1, datesContainer, sep2, statusSelect, delayInput, addBtn, remBtn);
             setupDrag(row);
             return row;
         }
 
-        // ── Modal öffnen ───────────────────────────────────────────────────
-        function openOrgaModal(newNoteBtn) {
-            if (document.getElementById(ORGA_MODAL_ID)) return; // bereits offen
+        // ── Generische Modal-Fabrik ────────────────────────────────────────
+        function buildOrgaModal({ title, initialRows, onSave }) {
+            if (document.getElementById(ORGA_MODAL_ID)) return;
 
             const backdrop = document.createElement('div');
             backdrop.className = 'orga-backdrop';
@@ -2075,7 +2422,7 @@
 
             const modal = document.createElement('div');
             modal.id = ORGA_MODAL_ID;
-            modal.className = 'modal fade';   // noch OHNE "in"
+            modal.className = 'modal fade';
             modal.tabIndex = -1;
             modal.style.cssText = 'display:block; padding-right:17px;';
             modal.innerHTML = `
@@ -2083,7 +2430,7 @@
                     <div class="modal-content">
                         <div class="modal-header">
                             <button type="button" class="close" id="orga-close-x">×</button>
-                            <h4 class="modal-title">Projektnotiz: Organisation</h4>
+                            <h4 class="modal-title">${title}</h4>
                         </div>
                         <div class="modal-body" id="orga-rows-container"></div>
                         <div class="modal-footer">
@@ -2094,90 +2441,161 @@
                 </div>
             `;
             document.body.appendChild(modal);
-
-            // "in" nach 200 ms → CSS-Transition greift
             setTimeout(() => modal.classList.add('in'), 200);
 
             const rowsContainer = modal.querySelector('#orga-rows-container');
-            DEFAULT_ROWS.forEach(data => rowsContainer.appendChild(createRow(rowsContainer, data)));
-            setupContainerDrag(rowsContainer);  // Container-Drag registrieren
+            initialRows.forEach(data => rowsContainer.appendChild(createRow(rowsContainer, data)));
+            setupContainerDrag(rowsContainer);
 
             function closeModal() {
                 modal.classList.remove('in');
-                setTimeout(() => {
-                    modal.remove();
-                    backdrop.remove();
-                }, 200);
+                setTimeout(() => { modal.remove(); backdrop.remove(); }, 200);
             }
 
-            modal.querySelector('#orga-close-x').addEventListener('click',  closeModal);
+            modal.querySelector('#orga-close-x').addEventListener('click', closeModal);
             modal.querySelector('#orga-cancel-btn').addEventListener('click', closeModal);
             backdrop.addEventListener('click', closeModal);
+            modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
 
-            // Klick direkt auf den Modal-Hintergrund (nicht auf den Dialog) schließt auch
-            modal.addEventListener('click', e => {
-                if (e.target === modal) closeModal();
-            });
-
-            // ── Speichern ──────────────────────────────────────────────────
             modal.querySelector('#orga-save-btn').addEventListener('click', () => {
-                const rows = rowsContainer.querySelectorAll('.orga-row');
-                const lines = Array.from(rows).map(r => buildRowText(r)).join('\n');
-
+                const lines = [...rowsContainer.querySelectorAll('.orga-row')]
+                    .map(r => buildRowText(r)).join('\n');
                 closeModal();
-
-                // 1) Neuen-Notiz-Dialog öffnen
-                newNoteBtn.click();
-
-                const noteModal = document.querySelector('#manage-project-note');
-                if (!noteModal) return;
-
-                const noteObs = new MutationObserver((_, obs) => {
-                    if (!noteModal.classList.contains('in')) return;
-                    obs.disconnect();
-
-                    // 2) verifyType auf "organisation" setzen
-                    const verifySelect = noteModal.querySelector('[name="verifyType"]');
-                    if (verifySelect) {
-                        verifySelect.value = 'organisation';
-                        verifySelect.dispatchEvent(new Event('change', { bubbles: true }));
-                    }
-
-                    // 3) Text in den iframe-Editor einfügen
-                    setTimeout(() => {
-                        const editorIframe = noteModal.querySelector('[id*="project-note-editor"]');
-                        if (!editorIframe) return;
-                        try {
-                            const doc = editorIframe.contentDocument
-                                     || editorIframe.contentWindow?.document;
-                            if (!doc) return;
-                            doc.body.focus();
-                            // Alles selektieren und Text einsetzen (funktioniert in den meisten RTE-iframes)
-                            doc.execCommand('selectAll', false, null);
-                            const html = lines
-                                .split('\n')
-                                .map(l => `<p>${l}</p><br>`)
-                                .join('');
-                            const inserted = doc.execCommand('insertHTML', false, html);
-                            if (!inserted) {
-                                // Fallback: direkt ins body schreiben
-                                doc.body.innerHTML = html;
-                                doc.body.dispatchEvent(new Event('input', { bubbles: true }));
-                            }
-                        } catch (err) {
-                            console.warn('[Orga] Editor-Insert fehlgeschlagen:', err);
-                        }
-                    }, 450);
-                });
-
-                noteObs.observe(noteModal, { attributes: true, attributeFilter: ['class'] });
-                setTimeout(() => noteObs.disconnect(), 10000);
+                onSave(lines);
             });
         }
 
-        // ── Orga-Button in die Seite injizieren ────────────────────────────
+        // ── Hilfsfunktion: Text in iframe-Editor einfügen ─────────────────
+        function insertIntoNoteEditor(noteModal, lines, verifyType) {
+            const verifySelect = noteModal.querySelector('[name="verifyType"]');
+            if (verifySelect) {
+                verifySelect.value = verifyType;
+                verifySelect.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+            setTimeout(() => {
+                const editorIframe = noteModal.querySelector('[id*="project-note-editor"]');
+                if (!editorIframe) return;
+                try {
+                    const doc = editorIframe.contentDocument || editorIframe.contentWindow?.document;
+                    if (!doc) return;
+                    doc.body.focus();
+                    doc.execCommand('selectAll', false, null);
+                    const html = lines.split('\n').map(l => `${l}<br>`).join('');
+                    if (!doc.execCommand('insertHTML', false, html)) {
+                        doc.body.innerHTML = html;
+                        doc.body.dispatchEvent(new Event('input', { bubbles: true }));
+                    }
+                } catch (err) {
+                    console.warn('[Orga] Editor-Insert fehlgeschlagen:', err);
+                }
+            }, 450);
+        }
+
+        // ── Neue Orga-Notiz erstellen ──────────────────────────────────────
+        function openOrgaModal(newNoteBtn) {
+            const storedData = JSON.parse(localStorage.getItem(project_id) || '{}');
+            const projectType = (storedData.project_type || '').trim();
+            const rows = projectType === 'Medienberater Zweittermin' ? ZT_ROWS : DEFAULT_ROWS;
+
+            buildOrgaModal({
+                title: 'Projektnotiz: Organisation',
+                initialRows: rows,
+                onSave: lines => {
+                    newNoteBtn.click();
+                    const noteModal = document.querySelector('#manage-project-note');
+                    if (!noteModal) return;
+                    const obs = new MutationObserver((_, o) => {
+                        if (!noteModal.classList.contains('in')) return;
+                        o.disconnect();
+                        insertIntoNoteEditor(noteModal, lines, 'organisation');
+                    });
+                    obs.observe(noteModal, { attributes: true, attributeFilter: ['class'] });
+                    setTimeout(() => obs.disconnect(), 10000);
+                },
+            });
+        }
+
+        // ── Bestehende Orga-Notiz bearbeiten ──────────────────────────────
+        function openOrgaEditModal(noteData) {
+            buildOrgaModal({
+                title: 'Orga-Notiz bearbeiten',
+                initialRows: noteData.lines,
+                onSave: lines => {
+                    const editBtn = document.getElementById(noteData.noteId);
+                    if (!editBtn) return;
+                    editBtn.click();
+                    const noteModal = document.querySelector('#manage-project-note');
+                    if (!noteModal) return;
+                    const obs = new MutationObserver((_, o) => {
+                        if (!noteModal.classList.contains('in')) return;
+                        o.disconnect();
+                        insertIntoNoteEditor(noteModal, lines, 'organisation');
+                    });
+                    obs.observe(noteModal, { attributes: true, attributeFilter: ['class'] });
+                    setTimeout(() => obs.disconnect(), 10000);
+                },
+            });
+        }
+
+        // ── Notiz-Auswahl (bei mehreren Orga-Notizen) ─────────────────────
+        function openOrgaNotePicker(notes) {
+            const PICKER_ID = 'orga-note-picker';
+            if (document.getElementById(PICKER_ID)) return;
+
+            const backdrop = document.createElement('div');
+            backdrop.className = 'orga-backdrop';
+            document.body.appendChild(backdrop);
+
+            const picker = document.createElement('div');
+            picker.id = PICKER_ID;
+            picker.className = 'modal fade';
+            picker.tabIndex = -1;
+            picker.style.cssText = 'display:block; padding-right:17px;';
+            picker.innerHTML = `
+                <div class="modal-dialog modal-sm">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <button type="button" class="close" id="orga-picker-close">×</button>
+                            <h4 class="modal-title">Orga-Notiz wählen</h4>
+                        </div>
+                        <div class="modal-body" id="orga-picker-list" style="padding:0;"></div>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(picker);
+            setTimeout(() => picker.classList.add('in'), 200);
+
+            function closePicker() {
+                picker.classList.remove('in');
+                setTimeout(() => { picker.remove(); backdrop.remove(); }, 200);
+            }
+            picker.querySelector('#orga-picker-close').addEventListener('click', closePicker);
+            backdrop.addEventListener('click', closePicker);
+            picker.addEventListener('click', e => { if (e.target === picker) closePicker(); });
+
+            const list = picker.querySelector('#orga-picker-list');
+            notes.forEach(note => {
+                const btn = document.createElement('button');
+                btn.className = 'orga-picker-item';
+                btn.innerHTML = `<strong>${note.date}</strong> <span style="color:#888;font-size:12px;">${note.user}</span>`;
+                btn.addEventListener('click', () => {
+                    closePicker();
+                    setTimeout(() => openOrgaEditModal(note), 300);
+                });
+                list.appendChild(btn);
+            });
+        }
+
+        // ── Buttons in die Seite injizieren ───────────────────────────────
         function injectOrgaButton() {
-            if (document.getElementById(ORGA_BTN_ID)) return;
+            if (document.getElementById(ORGA_BTN_ID)) {
+                // Edit-Button ggf. nachrüsten
+                if (!document.getElementById(ORGA_EDIT_BTN_ID) && findOrgaNotes().length) {
+                    const triggerBtn = document.getElementById(ORGA_BTN_ID);
+                    appendEditBtn(triggerBtn);
+                }
+                return;
+            }
 
             const newNoteBtn = document.querySelector('#manage-note-dialog-project-new');
             if (!newNoteBtn) return;
@@ -2186,16 +2604,38 @@
             if (!targetContainer) return;
 
             const orgaBtn = document.createElement('a');
-            orgaBtn.id        = ORGA_BTN_ID;
-            orgaBtn.className = 'btn btn-info';
+            orgaBtn.id = ORGA_BTN_ID;
+            orgaBtn.className = 'btn btn-default';
             orgaBtn.textContent = 'Orga';
             orgaBtn.href = '#';
             orgaBtn.addEventListener('click', e => {
                 e.preventDefault();
                 openOrgaModal(newNoteBtn);
             });
-
+            const calIcon = document.createElement('i');
+            calIcon.className = 'glyphicon glyphicon-plus';
+            orgaBtn.prepend(calIcon);
             targetContainer.prepend(orgaBtn);
+
+            // Edit-Button direkt danach hinzufügen, falls Orga-Notizen vorhanden
+            if (findOrgaNotes().length) appendEditBtn(orgaBtn);
+        }
+
+        function appendEditBtn(afterEl) {
+            if (document.getElementById(ORGA_EDIT_BTN_ID)) return;
+            const editBtn = document.createElement('a');
+            editBtn.id = ORGA_EDIT_BTN_ID;
+            editBtn.className = 'btn btn-info glyphicon glyphicon-pencil';
+            editBtn.href = '#';
+            editBtn.title = 'Orga-Notiz bearbeiten';
+            editBtn.style.marginLeft = '4px';
+            editBtn.addEventListener('click', e => {
+                e.preventDefault();
+                const notes = findOrgaNotes();
+                if (!notes.length) return;
+                notes.length === 1 ? openOrgaEditModal(notes[0]) : openOrgaNotePicker(notes);
+            });
+            afterEl.after(editBtn);
         }
 
         // Sofort versuchen + bei DOM-Änderungen erneut prüfen

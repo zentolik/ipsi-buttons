@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Copy-Buttons
 // @namespace    https://github.com/zentolik
-// @version      0.95
+// @version      0.96
 // @description  doing stuff ʕ·͡ᴥ·ʔ
 // @author       Zentolik
 // @match        https://ipsi.securewebsystems.net/project/detailed/*
@@ -13,7 +13,7 @@
 
 !(function() { // ʕ·͡ᴥ·ʔ hi & ty <3
     'use strict';
-    const SCRIPT_VERSION = '0.95';
+    const SCRIPT_VERSION = '0.96';
     console.log(`ʕ·͡ᴥ·ʔ *bup* v${SCRIPT_VERSION}`);
     let settings = {
         button_position: true, // ändert die position vom btn (wenn auf "false", empfähle ich "copy_icon" zu aktivieren") //
@@ -81,6 +81,7 @@
                 createSettings();
                 createCopyButton(false, false, false, 'copyPath');
                 createCopyButton(false, false, false, 'copyClientdata');
+                createCopyButton(false, false, false, 'copyPhonedata');
                 return true;
             }
         }
@@ -140,6 +141,7 @@
                 loopListener = false;
                 createCopyButton(edo, client_id, client_domain, 'copyPath');
                 createCopyButton(edo, client_id, client_domain, 'copyClientdata');
+                createCopyButton(edo, client_id, client_domain, 'copyPhonedata');
                 if (settings.open_folder) {
                     openFolderButton(edo, client_id);
                 }
@@ -177,6 +179,10 @@
                 if (copyClientdata) {
                     copyClientdata.remove();
                 }
+                const copyPhonedata = document.querySelector('#copyPhonedata');
+                if (copyPhonedata) {
+                    copyPhonedata.remove();
+                }
                 removeButton.remove();
             });
             document.querySelector('.copyBtnContainer').appendChild(removeButton);
@@ -206,7 +212,7 @@
         customColor = settings.button_color.startsWith("#");
         color_class = customColor ? null : colorMap[buttonColor] || color_class;
         const data = JSON.parse(localStorage.getItem(project_id));
-        if ((!edo && !client_id && !client_domain || type === 'copyClientdata') && data) {
+        if ((!edo && !client_id && !client_domain || type === 'copyClientdata' || type === 'copyPhonedata') && data) {
             client_domain = data.client_domain;
             client_id = data.client_id;
             edo = data.edo;
@@ -233,6 +239,24 @@
                 };
                 button.addEventListener('click', () =>
                     window.open(`https://otrs.euroweb.net/index.pl?Action=AgentTicketEmail#${JSON.stringify(extendedData)}`, '_blank')
+                );
+            }
+        }
+        if (type === 'copyPhonedata') {
+            if (!document.querySelector('#copyPhonedata') && document.body.classList.contains('otrs_extension_active') && data.project_type && data.project_type.trim() === 'Medienberater Zweittermin') {
+                const userEmail = (settings.user_email || '') + '@ew.de';
+                copy = userEmail;
+                const button = createButton('copyPhonedata', settings.copy_icon ? `btn ${color_class} glyphicon glyphicon-share` : `btn ${color_class}`, settings.copy_icon ? '' : 'MB Zweittermin');
+                button.title = 'OTRS Domaintransfer Ticket';
+                setBtnProperties(button);
+                const extendedData = {
+                    ...data,
+                    department: settings.department || '',
+                    user_email: userEmail,
+                    action_type: 'phone'
+                };
+                button.addEventListener('click', () =>
+                    window.open(`https://otrs.euroweb.net/index.pl?Action=AgentTicketPhone#${JSON.stringify(extendedData)}`, '_blank')
                 );
             }
         }
@@ -327,7 +351,7 @@
                 --cb_color_green: #15db81;
                 --cb_color_gray: #f2f5ff;
             }
-            #copyPath, #copyClientdata, #removeButton {
+            #copyPath, #copyClientdata, #copyPhonedata, #removeButton {
                 position: unset;
                 transition: width 0.35s ${bouncy_transition};
             }
@@ -1273,11 +1297,16 @@
             if (copyClientdata) {
                 copyClientdata.remove();
             }
+            const copyPhonedata = document.querySelector('#copyPhonedata');
+            if (copyPhonedata) {
+                copyPhonedata.remove();
+            }
 
             const storedData = JSON.parse(localStorage.getItem(project_id));
             if (storedData) {
                 createCopyButton(false, false, false, 'copyPath');
                 createCopyButton(false, false, false, 'copyClientdata');
+                createCopyButton(false, false, false, 'copyPhonedata');
             }
 
             const removeButton = document.querySelector('#removeButton');

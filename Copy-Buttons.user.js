@@ -1367,6 +1367,8 @@
 
                 localStorage.setItem('settings', JSON.stringify(settings));
 
+                updateCopyButton(); // Buttons direkt aktualisieren, damit sie auf'm neuen Stand sind
+
                 showNotification('Änderungen gespeichert');
 
                 // Popup schließen

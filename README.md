@@ -31,7 +31,7 @@ Ein Button, der beim klicken den Pfad zum DFS-Ordner kopiert.
 
 **Mein Button wird nicht angezeigt :(**
 - In Chrome-Extension-Übersicht (chrome://extensions/), oben rechts, den Entwicklermodus zu aktivieren.
-- In Chrome-Extension-Übersicht (chrome://extensions/), nach der "Tampermonkey"-Erweiterung suchen und auf Details klicken. Darauf öffnet sich eine neue Seite, mit der Detail-Ansicht. Dort muss das "Nutzerscripts zulassen"-Feld aktiviert sein.
+- In Chrome-Extension-Übersicht (chrome://extensions/) nach der "Tampermonkey"-Erweiterung suchen und auf Details klicken. Darauf öffnet sich eine neue Seite, mit der Detail-Ansicht. Dort muss das "Nutzerscripts zulassen"-Feld aktiviert sein.
 
 **Wie kann ich eine andere bzw. ältere Version laden?**
 - Ladet die Version eurer Wahl runter und Folgt der Update-Anleitung für ältere Versionen.

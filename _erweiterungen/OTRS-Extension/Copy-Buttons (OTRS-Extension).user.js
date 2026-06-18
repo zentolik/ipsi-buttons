@@ -1,12 +1,13 @@
 // ==UserScript==
 // @name         Copy-Buttons (OTRS-Extension)
 // @namespace    https://github.com/zentolik
-// @version      0.08
+// @version      0.10
 // @description  Funktioniert nur mit Copy-Buttons Version 0.82 oder neuer!
 // @author       Zentolik
 // @match        https://otrs.euroweb.net/index.pl?Action=AgentTicketEmail*
+// @match        https://otrs.euroweb.net/index.pl?Action=AgentTicketPhone*
 // @match        https://ipsi.securewebsystems.net/project/detailed/*
-// @icon         https://www.google.com/s2/favicons?sz=64&domain=otrs.euroweb.net
+// @icon         https://t3.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://otrs.euroweb.net&size=64
 // @updateURL    https://github.com/zentolik/ipsi-buttons/raw/main/_erweiterungen/OTRS-Extension/Copy-Buttons%20(OTRS-Extension).user.js
 // @downloadURL  https://github.com/zentolik/ipsi-buttons/raw/main/_erweiterungen/OTRS-Extension/Copy-Buttons%20(OTRS-Extension).user.js
 // @grant        none
@@ -22,14 +23,18 @@
     if (HOST === 'otrs.euroweb.net' && URL[1] && !document.body.classList.contains('LoginScreen')) { // Code nur laufen lassen; wenn NICHT im LogIn-Screen, es die OTRS-Seite ist und die URL die MailData beinhaltet.
         const mailData = JSON.parse(decodeURI(URL[1]));
         console.log(mailData);
+        const isPhone = URL[0].includes('Action=AgentTicketPhone');
+        const isEmail = URL[0].includes('Action=AgentTicketEmail');
 
         const selectors = { // Map, zum selektieren der Felder.
             dest_search: '#Dest_Search',
             dest_select: '#Dest_Select',
             to_customer: '#ToCustomer',
             to_customer_label: '[for="ToCustomer"]',
+            from_customer: '#FromCustomer',
             customer_id: '#CustomerID',
             subject: '#Subject',
+            rich_text_field: '#RichTextField iframe',
             template_label: 'label[for="StandardTemplateID"]',
             template_search: '#StandardTemplateID_Search',
             template_select: '#StandardTemplateID_Select',
@@ -40,6 +45,7 @@
             sender_select: '#DynamicField_Sender_Select',
         };
 
+        if (isEmail) {
         const department_array = mailData.department.toLowerCase().trim().split('/');
 
         let mailSettings = {
@@ -47,6 +53,7 @@
             desired_domain: 'no',
             desired_domain_name: '',
             image_quality: 'no',
+            social_content_pilot: 'no',
             qr_code: 'no'
         }
 
@@ -243,6 +250,7 @@
             close_button.addEventListener("click", function (e) {
                 endScriptLoading();
                 popup.remove(); // Schließe das Popup
+                close_button.remove();
                 popup_open = false;
                 loading = false;
             });
@@ -321,6 +329,19 @@
                 qualityLabel.appendChild(qualitySelect);
                 form.appendChild(qualityLabel);
 
+                // SocialContentPilot Select
+                const scpLabel = document.createElement('label');
+                scpLabel.innerText = 'SocialContentPilot-Text anzeigen:';
+                const scpSelect = document.createElement('select');
+                scpSelect.name = 'scp_select'
+                scpSelect.innerHTML = selectElement;
+                scpSelect.value = mailSettings.social_content_pilot;
+                scpSelect.onchange = () => {
+                    mailSettings.social_content_pilot = scpSelect.value;
+                };
+                scpLabel.appendChild(scpSelect);
+                form.appendChild(scpLabel);
+
                 // QR-Code Select
                 const qrLabel = document.createElement('label');
                 qrLabel.innerText = 'QR-Code-Text anzeigen:';
@@ -341,10 +362,14 @@
             saveButton.innerText = 'Speichern';
             saveButton.onclick = () => {
                 popup.remove(); // Schließe das Popup
+                close_button.remove();
                 popup_open = false;
                 if (!loading) {
                     endScriptLoading(); // ende loadingscreen
                 }
+                // Post-Save-Failsafe: Nach dem Speichern das Overlay garantiert
+                // beenden, falls die Vorlagen-/Body-Verarbeitung hängen bleibt.
+                setTimeout(() => { endScriptLoading(); }, 8000);
                 waitForElm(`.InputField_InputContainer:has(${selectors.template_search}) > .InputField_Selection > .Text`).then((elm) => {
                     const iframeText = document.querySelector('#RichTextField iframe');
                     const domainLink = `<a data-cke-saved-href="https://${mailData.client_domain}/" href="https://${mailData.client_domain}/">${mailData.client_domain}</a>`;
@@ -360,13 +385,16 @@
                                 // html = html.replace('+++ XXXXXXXX +++', `${mailData.client_id}`);
 
                                 // Betreff aus Textvorlage entfernen
+                                html = html.replace(/<p>\s*<strong>\s*Betreff:[\s\S]*?<\/strong>\s*<\/p>\s*/i, '');
                                 html = html.replace('Betreff: +++ XXXXXXXX +++ – Veröffentlichung Ihrer Website', '');
 
                                 // Anrede auswählen
                                 if (mailSettings.gender === 'male') {
                                     html = html.replace('geehrte/r Herr/Frau', 'geehrter Herr');
+                                    html = html.replace('Guten Tag Herr/Frau', 'Guten Tag Herr');
                                 } else if (mailSettings.gender === 'female') {
                                     html = html.replace('geehrte/r Herr/Frau', 'geehrte Frau');
+                                    html = html.replace('Guten Tag Herr/Frau', 'Guten Tag Frau');
                                 }
 
                                 // Ersetze mit dem Kundennamen
@@ -377,8 +405,36 @@
 
                                 let brandDomain = domainMap[mailData.project_brand] || 'euroweb.de';
                                 if (mailData.project_brand === 'United Media' && mailData.project_company === 'um united media Switzerland AG Schweiz') {
-                                    brandDomain = domainMap.United_Media_Schweiz;
+                                    brandDomain = domainMap['United Media Schweiz'];
                                 }
+
+                                // === NEU: Optionale Blöcke des aktuellen Templates behandeln ===
+                                // "Ja"   => nur das Marker-Label "[Optionaler ...]" entfernen, der Textblock bleibt erhalten.
+                                // "Nein" => kompletten Block (Marker + Text) bis zum naechsten Marker entfernen.
+                                // Reihenfolge MUSS Bildqualitaet -> SocialContentPilot -> QR-Code sein,
+                                // da jede "Nein"-Entfernung per Lookahead am jeweils naechsten Marker endet.
+
+                                // Bildqualitaets-Block
+                                if (mailSettings.image_quality === 'yes') {
+                                    html = html.replace(/<strong>\s*\[Optionaler Bildqualitäts-Block\]\s*<\/strong>\s*<br\s*\/?>/i, '');
+                                } else {
+                                    html = html.replace(/<strong>\s*\[Optionaler Bildqualitäts-Block\]\s*<\/strong>\s*<br\s*\/?>[\s\S]*?(?=<strong>\s*\[Optionaler SocialContentPilot-Block\])/i, '');
+                                }
+
+                                // SocialContentPilot-Block
+                                if (mailSettings.social_content_pilot === 'yes') {
+                                    html = html.replace(/<strong>\s*\[Optionaler SocialContentPilot-Block\]\s*<\/strong>\s*<br\s*\/?>/i, '');
+                                } else {
+                                    html = html.replace(/<strong>\s*\[Optionaler SocialContentPilot-Block\]\s*<\/strong>\s*<br\s*\/?>[\s\S]*?(?=<strong>\s*\[Optionaler QR-Code-Block\])/i, '');
+                                }
+
+                                // QR-Code-Block
+                                if (mailSettings.qr_code === 'yes') {
+                                    html = html.replace(/<strong>\s*\[Optionaler QR-Code-Block\]\s*<\/strong>\s*<br\s*\/?>/i, '');
+                                } else {
+                                    html = html.replace(/<strong>\s*\[Optionaler QR-Code-Block\]\s*<\/strong>\s*<br\s*\/?>[\s\S]*?(?=In Kürze führen wir)/i, '');
+                                }
+                                // === ENDE NEU ===
 
                                 // Wunschdomain (ja/nein)
                                 if (mailSettings.desired_domain === 'yes') {
@@ -462,10 +518,23 @@
         document.body.classList.add('scriptLoading');
         document.querySelector(selectors.to_customer_label).classList.add('confLabel');
 
-        function endScriptLoading() { // function, zum beenden des "scriptLoading"s
+        // Failsafe NUR für das Popup: Falls die Felder nach ~12s noch nicht fertig
+        // geladen sind (z.B. hängende Vorlagen-/Sender-Auswahl), das Popup trotzdem
+        // bedienbar machen. Das Seiten-Overlay (scriptLoading) bleibt bewusst aktiv,
+        // bis der Nutzer speichert oder das Popup schließt.
+        setTimeout(() => {
+            const stuckForm = document.querySelector('.cb_mailsettings_popup.formLoading');
+            if (stuckForm) stuckForm.classList.remove('formLoading');
+        }, 12000);
+
+        function endScriptLoading() { // beendet "scriptLoading" und entfernt den Schließbutton
             if (document.body.classList.contains('scriptLoading')) {
                 document.body.classList.remove('scriptLoading');
             }
+            // Sobald nichts mehr lädt (Body hat kein scriptLoading mehr), wird der
+            // Schließbutton nicht mehr gebraucht und ausgeblendet/entfernt.
+            const closeBtn = document.querySelector('.cb_close_button');
+            if (closeBtn) closeBtn.remove();
         }
 
         function waitForElm(selector) { // functin, zum warten auf ein Element
@@ -631,7 +700,7 @@
                 }
                 let brand = brandMap[mailData.project_brand] || '504';
                 if (mailData.project_brand === 'United Media' && mailData.project_company === 'um united media Switzerland AG Schweiz') {
-                    brand = brandMap.United_Media_Schweiz;
+                    brand = brandMap['United Media Schweiz'];
                 }
                 console.log(brand);
                 const template_label = document.querySelector(selectors.template_label);
@@ -643,21 +712,58 @@
                 });
             }
 
-            function next_state() { // function zum füllen des Feldes "Nächster Status des Tickets"
-                const next_state_search = document.querySelector(selectors.next_state_search);
-                next_state_search.focus();
-                waitForElm(`${selectors.next_state_select} [data-id="2"] > div`).then((elm) => {
-                    elm.click();
-                    waitForElm('#NextStateID_Select[aria-activedescendant="j16_3"] > #j16_1').then((elm) => {
-                        elm.click();
+            function next_state() { // Feld "Nächster Status des Tickets" zuverlässig auf "erfolgreich geschlossen" (data-id="2") setzen
+                const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
+                const selectedTextSel = `.InputField_InputContainer:has(${selectors.next_state_search}) > .InputField_Selection > .Text`;
+                let wantedText = '';
+
+                // Dropdown öffnen
+                const openDropdown = () => {
+                    const search = document.querySelector(selectors.next_state_search);
+                    if (search) { search.focus(); search.click(); }
+                };
+                // Option "erfolgreich geschlossen" (data-id="2") anklicken
+                const clickClosedSuccessful = () => {
+                    waitForElm(`${selectors.next_state_select} [data-id="2"]`).then((opt) => {
+                        const clickable = opt.querySelector('div') || opt;
+                        if (!wantedText) wantedText = norm(clickable.textContent);
+                        clickable.click();
                     });
-                });
+                };
+                // Hat die Auswahl wirklich "gehalten"?
+                const isSelected = () => {
+                    const el = document.querySelector(selectedTextSel);
+                    const txt = el ? norm(el.textContent) : '';
+                    if (!txt) return false;
+                    return wantedText ? txt === wantedText : /geschlossen|closed|success/i.test(txt);
+                };
+                const pick = () => { openDropdown(); clickClosedSuccessful(); };
+
+                // Erstauswahl + Wiederholung. Hintergrund: nach der Queue-Auswahl lädt
+                // OTRS die Status-Liste per AJAX neu und verwirft dabei eine zu früh
+                // getroffene Auswahl. Deshalb wird so lange erneut gewählt, bis die
+                // Auswahl tatsächlich übernommen wurde (behebt das "manchmal nochmal klicken").
+                pick();
+                let attempts = 0;
+                const retry = setInterval(() => {
+                    attempts++;
+                    if (isSelected()) {
+                        clearInterval(retry);
+                        // Spät-Kontrolle: falls eine verzögerte AJAX die Auswahl
+                        // doch noch entfernt, einmalig erneut setzen.
+                        setTimeout(() => { if (!isSelected()) pick(); }, 1200);
+                    } else if (attempts >= 10) {
+                        clearInterval(retry);
+                    } else {
+                        pick();
+                    }
+                }, 400);
             }
 
             function sender() { // function zum füllen des Feldes "Sender"
                 let brand = mailMap[mailData.project_brand] || 'info@euroweb.de';
                 if (mailData.project_brand === 'United Media' && mailData.project_company === 'um united media Switzerland AG Schweiz') {
-                    brand = mailMap.United_Media_Schweiz;
+                    brand = mailMap['United Media Schweiz'];
                 }
                 const sender_label = document.querySelector(selectors.sender_label);
                 sender_label.click();
@@ -695,5 +801,372 @@
             }, '3000');
 
         })
+        } // end isEmail
+
+        if (isPhone) {
+            let phoneSettings = {
+                mb_name: ''
+            };
+
+            const phoneStyle = document.createElement('style');
+            phoneStyle.textContent = `
+                @keyframes loading-ani {
+                    100% {transform: translate(-50%,-50%) rotate(1turn)}
+                }
+                body.scriptLoading {
+                    overflow: hidden;
+                    width: 100vw;
+                    height: 100vh;
+                }
+                body.scriptLoading #AppWrapper,
+                body.scriptLoading #AppWrapper::before,
+                body #AppWrapper .cb_mailsettings_popup.formLoading::before {
+                    pointer-event: none;
+                    touch-action: none;
+                    -webkit-user-select: none;
+                    -ms-user-select: none;
+                    user-select: none;
+                }
+                body.scriptLoading #AppWrapper {
+                    position: relative;
+                }
+                body.scriptLoading #AppWrapper::before,
+                body #AppWrapper .cb_mailsettings_popup.formLoading::before {
+                    position: absolute;
+                    content: '';
+                    z-index: 999999;
+                    background: rgb(0 0 0 / 75%);
+                    top: 0;
+                    left: 0;
+                    width: 100%;
+                    height: 100%;
+                }
+                body.scriptLoading #AppWrapper::after,
+                body #AppWrapper .cb_mailsettings_popup.formLoading::after {
+                    position: fixed;
+                    content: '';
+                    z-index: 999998;
+                    top: 50%;
+                    left: 50%;
+                    transform: translate(-50%,-50%);
+                    width: 50px;
+                    aspect-ratio: 1;
+                    display: grid;
+                    border-radius: 50%;
+                    background:
+                        linear-gradient(0deg ,rgb(0 0 0/50%) 30%,#0000 0 70%,rgb(0 0 0/100%) 0) 50%/8% 100%,
+                        linear-gradient(90deg,rgb(0 0 0/25%) 30%,#0000 0 70%,rgb(0 0 0/75% ) 0) 50%/100% 8%;
+                    background-repeat: no-repeat;
+                    animation: loading-ani 1s infinite steps(12);
+                }
+                body #AppWrapper .cb_close_button {
+                    position: fixed;
+                    top: 15px;
+                    left: 15px;
+                    height: 25px;
+                    width: 25px;
+                    z-index: 1000001;
+                    cursor: pointer;
+                }
+                body #AppWrapper .cb_close_button::before,
+                body #AppWrapper .cb_close_button::after{
+                    position: absolute;
+                    top: 50%;
+                    left: 50%;
+                    content: '';
+                    height: 1px;
+                    width: 25px;
+                    background-color: #fff;
+                    z-index: 1;
+                }
+                body #AppWrapper .cb_close_button::before {
+                    transform: translate(-50%,-50%) rotate(45deg);
+                }
+                body #AppWrapper .cb_close_button::after {
+                    transform: translate(-50%,-50%) rotate(-45deg);
+                }
+                body #AppWrapper .cb_mailsettings_popup {
+                    position: fixed;
+                    top: 50%;
+                    left: 50%;
+                    transform: translate(-50%,-50%);
+                    background-color: #fff;
+                    z-index: 1000001;
+                    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+                    width: 300px;
+                }
+                body #AppWrapper .cb_mailsettings_popup.formLoading {
+                    cursor: not-allowed;
+                }
+                body #AppWrapper .cb_mailsettings_popup h3 {
+                    margin-bottom: unset;
+                    padding-block: 20px;
+                    font-size: 20px;
+                    color: #fff;
+                    background-color: #333;
+                    text-align: center;
+                }
+                body #AppWrapper .cb_mailsettings_popup form {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 15px;
+                    padding: 20px;
+                }
+                body #AppWrapper .cb_mailsettings_popup form label {
+                    font-weight: bold;
+                    font-size: 13px;
+                }
+                body #AppWrapper .cb_mailsettings_popup form input[type="text"] {
+                    padding: 6px 8px;
+                    margin-top: 5px;
+                    border: 1px solid #ccc;
+                    border-radius: 0;
+                    font-size: 13px;
+                }
+                body #AppWrapper .cb_mailsettings_popup form button {
+                    padding: 8px 12px;
+                    width: fit-content;
+                    background-color: #F92;
+                    color: #fff;
+                    border: none;
+                    cursor: pointer;
+                }
+                body #AppWrapper .cb_mailsettings_popup .cb_doku_link {
+                    display: block;
+                    padding: 8px 20px;
+                    font-size: 12px;
+                    text-align: center;
+                    background-color: #f5f5f5;
+                    border-bottom: 1px solid #ddd;
+                }
+                body #AppWrapper .cb_mailsettings_popup .cb_doku_link a {
+                    color: #F92;
+                    text-decoration: none;
+                    font-weight: bold;
+                }
+                body #AppWrapper .cb_mailsettings_popup .cb_doku_link a:hover {
+                    text-decoration: underline;
+                }
+            `;
+            document.head.appendChild(phoneStyle);
+
+            let phone_popup_open = true;
+            let phone_loading = true;
+
+            function endPhoneScriptLoading() {
+                if (document.body.classList.contains('scriptLoading')) {
+                    document.body.classList.remove('scriptLoading');
+                }
+            }
+
+            function waitForElmPhone(selector) {
+                return new Promise(resolve => {
+                    if (document.querySelector(selector)) {
+                        return resolve(document.querySelector(selector));
+                    }
+                    const observer = new MutationObserver(mutations => {
+                        if (document.querySelector(selector)) {
+                            observer.disconnect();
+                            resolve(document.querySelector(selector));
+                        }
+                    });
+                    observer.observe(document.body, {
+                        childList: true,
+                        subtree: true
+                    });
+                });
+            }
+
+            // ── Popup erzeugen ──────────────────────────────────────────────
+            (function createPhoneSettingsPopup() {
+                const appWrapper = document.querySelector('#AppWrapper');
+                if (!appWrapper) return;
+
+                // Schließbutton
+                const close_button = document.createElement('span');
+                close_button.className = 'cb_close_button';
+                close_button.setAttribute('title', 'Popup schließen');
+                close_button.addEventListener('click', function () {
+                    endPhoneScriptLoading();
+                    popup.remove();
+                    close_button.remove();
+                    phone_popup_open = false;
+                    phone_loading = false;
+                });
+
+                // Popup-Container
+                const popup = document.createElement('div');
+                popup.className = 'cb_mailsettings_popup formLoading';
+
+                popup.innerHTML = `<h3>MB Zweittermin</h3>`;
+
+                // Doku-Link zum Nachschlagen des zuständigen MB
+                const dokuLink = document.createElement('div');
+                dokuLink.className = 'cb_doku_link';
+                const dokuUrl = `https://doku.securewebsystems.net/archive?filter%5Bcontract%5D=${mailData.client_id}&filter%5Bupload_date__isnull%5D=false`;
+                dokuLink.innerHTML = `<a href="${dokuUrl}" target="_blank">MB in Doku nachschlagen ↗</a>`;
+                popup.appendChild(dokuLink);
+
+                // Formular
+                const form = document.createElement('form');
+
+                // MB-Name Eingabefeld
+                const mbLabel = document.createElement('label');
+                mbLabel.setAttribute('for', 'cb_mb_name_input');
+                mbLabel.innerText = 'Zuständiger Medienberater:';
+                form.appendChild(mbLabel);
+
+                const mbInput = document.createElement('input');
+                mbInput.type = 'text';
+                mbInput.id = 'cb_mb_name_input';
+                mbInput.name = 'mb_name';
+                mbInput.placeholder = 'z.B. Max Mustermann';
+                mbInput.value = phoneSettings.mb_name;
+                mbInput.oninput = () => {
+                    phoneSettings.mb_name = mbInput.value;
+                };
+                form.appendChild(mbInput);
+
+                // Speichern-Button
+                const saveButton = document.createElement('button');
+                saveButton.type = 'button';
+                saveButton.innerText = 'Speichern';
+                saveButton.onclick = () => {
+                    popup.remove();
+                    close_button.remove();
+                    phone_popup_open = false;
+                    if (!phone_loading) {
+                        endPhoneScriptLoading();
+                    }
+
+                    // Betreff mit dem eingetragenen MB-Name aktualisieren
+                    const subject = document.querySelector(selectors.subject);
+                    if (subject) {
+                        const mbName = phoneSettings.mb_name.trim() || '+++Zuständiger MB+++';
+                        subject.value = `${mailData.client_id} – Domaintransfer starten | ${mbName}`;
+                    }
+
+                    // RichText ausfüllen (nach Popup-Schließen, da jetzt alles geladen ist)
+                    phoneRichText();
+
+                    phone_loading = false;
+                    endPhoneScriptLoading();
+                };
+                form.appendChild(saveButton);
+
+                popup.appendChild(form);
+                appWrapper.appendChild(popup);
+                appWrapper.appendChild(close_button);
+            })();
+
+            document.body.classList.add('scriptLoading');
+
+            // ── Hilfsvariablen ──────────────────────────────────────────────
+            const mailMap = {
+                'Euroweb': 'info@euroweb.de',
+                'Internet Media': 'info@internet-media.at',
+                'Stuttgarter Zeitung': 'info@stz-onlineservice.de',
+                'United Media': 'info@united-media.de',
+                'United Media Schweiz': 'info@united-media.ch',
+                'WESTFALEN-BLATT': 'info@westfalen-blatt-onlineservice.de',
+                'WN OnlineService': 'info@wn-onlineservice.de',
+            };
+
+            // ── Feld-Funktionen ─────────────────────────────────────────────
+
+            // #FromCustomer – User-E-Mail (user_email aus settings + @ew.de)
+            function fromCustomer() {
+                const from_customer = document.querySelector(selectors.from_customer);
+                if (!from_customer) return;
+                const ke = new KeyboardEvent('keydown', {
+                    bubbles: true, cancelable: true, keyCode: 13
+                });
+                from_customer.click();
+                from_customer.focus();
+                from_customer.value = mailData.user_email || '';
+                from_customer.dispatchEvent(ke);
+                const enterEvent = new KeyboardEvent('keydown', {
+                    key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true
+                });
+                from_customer.dispatchEvent(enterEvent);
+            }
+
+            // #CustomerID – Kundennummer
+            function phoneCustomerId() {
+                const customer_id = document.querySelector(selectors.customer_id);
+                if (customer_id) customer_id.value = mailData.client_id;
+            }
+
+            // #Dest_Search → Medienberatung → Onlineschaltung
+            function phoneDest() {
+                const dest_search = document.querySelector(selectors.dest_search);
+                if (!dest_search) return;
+                dest_search.focus();
+
+                // Schritt 1: Klicke das Expand-Icon (i.jstree-ocl) von "Medienberatung", um den Baum aufzuklappen
+                waitForElmPhone('[data-id="303||Medienberatung"] > i').then((elm) => {
+                    elm.click();
+                    // Schritt 2: Warte auf "Onlineschaltung" und klicke es an
+                    waitForElmPhone('[data-id="430||Medienberatung::Onlineschaltung"] > div').then((elm) => {
+                        elm.click();
+                    });
+                });
+            }
+
+            // #Subject – wird initial mit Platzhalter gesetzt, nach Popup mit echtem MB-Name
+            function phoneSubject() {
+                const subject = document.querySelector(selectors.subject);
+                if (subject) {
+                    subject.value = `${mailData.client_id} – Domaintransfer starten | +++Zuständiger MB+++`;
+                }
+            }
+
+            // #RichTextField iframe – "Ich bin fertig, die Website kann online gestellt werden."
+            function phoneRichText() {
+                waitForElmPhone(selectors.rich_text_field).then((iframeEl) => {
+                    setTimeout(() => {
+                        const body = iframeEl.contentWindow.document.querySelector('body');
+                        if (body) {
+                            body.innerHTML = '<p>Ich bin fertig, die Website kann online gestellt werden.</p>';
+                        }
+                    }, 500);
+                });
+            }
+
+            // #DynamicField_Sender_Search – Sender (wie regulär)
+            function phoneSender() {
+                let brand = mailMap[mailData.project_brand] || 'info@euroweb.de';
+                if (mailData.project_brand === 'United Media' && mailData.project_company === 'um united media Switzerland AG Schweiz') {
+                    brand = mailMap['United Media Schweiz'];
+                }
+                const sender_label = document.querySelector(selectors.sender_label);
+                if (!sender_label) return;
+                sender_label.click();
+                waitForElmPhone(`${selectors.sender_select} [data-id="${brand}"] > div`).then((elm) => {
+                    elm.click();
+                });
+            }
+
+            // ── Felder ausfüllen (ohne Subject und RichText – die kommen nach dem Popup) ──
+            window.addEventListener('load', function () {
+                fromCustomer();
+                phoneCustomerId();
+                phoneSubject(); // Platzhalter setzen, wird nach Popup überschrieben
+                phoneDest();
+                setTimeout(() => {
+                    phoneSender();
+                }, 550);
+
+                setTimeout(() => {
+                    if (!phone_popup_open) {
+                        endPhoneScriptLoading();
+                    }
+                    phone_loading = false;
+                    // formLoading vom Popup entfernen, damit der User interagieren kann
+                    const formLoadingEl = document.querySelector('.cb_mailsettings_popup.formLoading');
+                    if (formLoadingEl) formLoadingEl.classList.remove('formLoading');
+                }, 3000);
+            });
+        } // end isPhone
     }
 })();

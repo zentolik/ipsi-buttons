@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Copy-Buttons (OTRS-Extension)
 // @namespace    https://github.com/zentolik
-// @version      0.10
+// @version      0.11
 // @description  Funktioniert nur mit Copy-Buttons Version 0.82 oder neuer!
 // @author       Zentolik
 // @match        https://otrs.euroweb.net/index.pl?Action=AgentTicketEmail*
@@ -15,6 +15,14 @@
 
 !(function() {
     'use strict';
+    // Sofort ausführen, wenn die Seite bereits fertig geladen ist, sonst auf 'load' warten.
+    // Wichtig: Tampermonkey injiziert standardmäßig bei 'document-idle' – dabei kann 'load'
+    // bereits gefeuert sein, bevor ein addEventListener('load', …) registriert wird, sodass
+    // der Handler nie liefe. Diese Hilfsfunktion deckt beide Fälle ab.
+    function runWhenLoaded(fn) {
+        if (document.readyState === 'complete') { fn(); }
+        else { window.addEventListener('load', fn); }
+    }
     const HOST = window.location.host;
     const URL = window.location.href.split('#');
     if (HOST === 'ipsi.securewebsystems.net') {
@@ -554,6 +562,19 @@
                 });
             });
         }
+        function waitForCond(check) { // wartet, bis check() truthy wird (beobachtet auch Attribut-Änderungen wie readonly)
+            return new Promise(resolve => {
+                if (check()) return resolve();
+                let poll;
+                const observer = new MutationObserver(() => {
+                    if (check()) { observer.disconnect(); clearInterval(poll); resolve(); }
+                });
+                observer.observe(document.body, { childList: true, subtree: true, attributes: true });
+                poll = setInterval(() => {
+                    if (check()) { observer.disconnect(); clearInterval(poll); resolve(); }
+                }, 200);
+            });
+        }
         function simulateEnterOnInput(input) { // functin, um "Enter"-Taste zu simulieren
             const enterEvent = new KeyboardEvent('keydown', {
                 key: 'Enter',
@@ -602,7 +623,7 @@
             'WN OnlineService': 0, // WN
         }
 
-        window.addEventListener('load', function () {
+        runWhenLoaded(function () {
             function dest() { // function zum füllen des Feldes "Aus Queue"
                 const dest_search = document.querySelector(selectors.dest_search);
                 dest_search.focus();
@@ -611,27 +632,27 @@
                     waitForElm('[data-id="182||Webdepartment Berlin"] > i').then((elm) => {
                         elm.click();
                     });
-                    if (department_array[1].includes('team daniel regiment')) {
+                    if ((department_array[1] || '').includes('team daniel regiment')) {
                         waitForElm('[data-id="185||Webdepartment Berlin::Team Daniel Regiment"] > div').then((elm) => {
                             elm.click();
                         });
                     }
-                    if (department_array[1].includes('team dennis schübel')) {
+                    if ((department_array[1] || '').includes('team dennis schübel')) {
                         waitForElm('[data-id="184||Webdepartment Berlin::Team Dennis Schübel"] > div').then((elm) => {
                             elm.click();
                         });
                     }
-                    if (department_array[1].includes('team manuela glockmann')) {
+                    if ((department_array[1] || '').includes('team manuela glockmann')) {
                         waitForElm('[data-id="189||Webdepartment Berlin::Team Manuela Glockmann"] > div').then((elm) => {
                             elm.click();
                         });
                     }
-                    if (department_array[1].includes('team piotr mostowy')) {
+                    if ((department_array[1] || '').includes('team piotr mostowy')) {
                         waitForElm('[data-id="186||Webdepartment Berlin::Team Piotr Mostowy"] > div').then((elm) => {
                             elm.click();
                         });
                     }
-                    if (department_array[1].includes('team sabrina reichenbach')) {
+                    if ((department_array[1] || '').includes('team sabrina reichenbach')) {
                         waitForElm('[data-id="190||Webdepartment Berlin::Team Sabrina Reichenbach"] > div').then((elm) => {
                             elm.click();
                         });
@@ -703,12 +724,20 @@
                     brand = brandMap['United Media Schweiz'];
                 }
                 console.log(brand);
-                const template_label = document.querySelector(selectors.template_label);
-                template_label.click();
-                waitForElm(`${selectors.template_select} [data-id="${brand}"] > div`).then((elm) => {
-                    elm.click();
-                    const formLoading = document.querySelector('.formLoading');
-                    formLoading.classList.remove('formLoading');
+                // Erst auswählen, wenn #StandardTemplateID_Search NICHT mehr readonly ist.
+                // OTRS lädt die Vorlagen-Liste per AJAX (nach der Queue-Auswahl); bis dahin ist
+                // das Feld readonly ("Nicht verfügbar") und ein Klick hätte keine Wirkung.
+                waitForCond(() => {
+                    const el = document.querySelector(selectors.template_search);
+                    return el && !el.hasAttribute('readonly');
+                }).then(() => {
+                    const template_label = document.querySelector(selectors.template_label);
+                    template_label.click();
+                    waitForElm(`${selectors.template_select} [data-id="${brand}"] > div`).then((elm) => {
+                        elm.click();
+                        const formLoading = document.querySelector('.formLoading');
+                        if (formLoading) formLoading.classList.remove('formLoading');
+                    });
                 });
             }
 
@@ -1148,7 +1177,7 @@
             }
 
             // ── Felder ausfüllen (ohne Subject und RichText – die kommen nach dem Popup) ──
-            window.addEventListener('load', function () {
+            runWhenLoaded(function () {
                 fromCustomer();
                 phoneCustomerId();
                 phoneSubject(); // Platzhalter setzen, wird nach Popup überschrieben

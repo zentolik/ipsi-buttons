@@ -10,7 +10,7 @@ Ein Button, der beim klicken den Pfad zum DFS-Ordner kopiert.
     - [Copy-Buttons installieren!](https://github.com/zentolik/ipsi-buttons/raw/main/Copy-Buttons.user.js)
     - [OTRS-Extension installieren!](https://github.com/zentolik/ipsi-buttons/raw/main/_erweiterungen/OTRS-Extension/Copy-Buttons%20(OTRS-Extension).user.js) *(Für die OTRS-Extension ist Copy-Buttons v0.82 oder neuer erforderlich)*
 
-- **[Zur "chrome-folder-opener"-Anleitung](https://github.com/zentolik/ipsi-buttons/tree/main/_erweiterungen/chrome-folder-opener)**
+- **[Zur "ipsi-vsc-helper"-Anleitung](https://github.com/zentolik/ipsi-buttons/tree/main/_erweiterungen/ipsi-vsc-helper)**
 
 ----
 

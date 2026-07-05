@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Copy-Buttons
 // @namespace    https://github.com/zentolik
-// @version      0.96
+// @version      0.97
 // @description  doing stuff ʕ·͡ᴥ·ʔ
 // @author       Zentolik
 // @match        https://ipsi.securewebsystems.net/project/detailed/*
@@ -13,7 +13,7 @@
 
 !(function() { // ʕ·͡ᴥ·ʔ hi & ty <3
     'use strict';
-    const SCRIPT_VERSION = '0.96';
+    const SCRIPT_VERSION = '0.97';
     console.log(`ʕ·͡ᴥ·ʔ *bup* v${SCRIPT_VERSION}`);
     let settings = {
         button_position: true, // ändert die position vom btn (wenn auf "false", empfähle ich "copy_icon" zu aktivieren") //
@@ -23,12 +23,14 @@
         copy_icon: false, // copy-icon als button-text (anstatt des pfades) //
         button_color: 'blue', // red / yellow / blue / cyan / green / gray / #rrggbb (HEX-Color) //
         delete_button: false, // erstellt ein delete-button, der beim klicken die projekt-daten aus dem local storage löscht //
-        open_folder: false, // WIP (bitte nicht aktivieren. funktioniert nicht) //
+        vsc_open: false, // Linksklick auf den Pfad-Button listet die Ordner im Pfad und öffnet sie in VS Code (benötigt den lokalen ipsi-vsc-helper) //
+        sandbox_check: false, // prüft beim Laden der Seite nacheinander alle Formix-Einträge und markiert in der Status-Spalte, ob die Sandbox aktiviert ist //
         darkmode: false,
         default_email_client: 'browser',
         department: '',
         user: '',
         user_email: '',
+        ls_sort: 'project_id', // Sortierkriterium der Projekt-Auflistung: 'project_id' oder 'client_id' (wird auch als führender Wert im Label angezeigt)
     };
 
     const selectors = { // Attribute, zum selektieren der Container
@@ -142,9 +144,6 @@
                 createCopyButton(edo, client_id, client_domain, 'copyPath');
                 createCopyButton(edo, client_id, client_domain, 'copyClientdata');
                 createCopyButton(edo, client_id, client_domain, 'copyPhonedata');
-                if (settings.open_folder) {
-                    openFolderButton(edo, client_id);
-                }
                 clearInterval(intervalId);
             }
         }
@@ -270,6 +269,15 @@
                 button.setAttribute('style', `background-color: ${settings.button_color.toLowerCase().trim()} !important;`);
             }
             button.addEventListener('click', () => copyToClipboard(copy));
+            if (button.id === 'copyPath') { // Linksklick auf den Pfad-Button: zusätzlich Ordner scannen und in VS Code öffnen (falls aktiviert)
+                button.addEventListener('click', () => vscScanAndOpen(copy, edo));
+                button.addEventListener('contextmenu', (event) => { // Rechtsklick: Öffnen-Menü (nur wenn Feature aktiv, sonst normales Browser-Kontextmenü)
+                    if (!settings.vsc_open) return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    showVscCtxMenu(event, copy, edo);
+                });
+            }
             document.querySelector('.copyBtnContainer').appendChild(button);
         }
     };
@@ -311,13 +319,277 @@
         }, 5000);
     };
 
-    const openFolderButton = (server, id) => {
-        const button = createButton('openFolderButton', 'btn btn-info', folder_svg);
-        button.addEventListener('click', () => fetch(`http://localhost:5000/openFolder?path=L:\\${server}\\${id}`)
-            .then(() => console.log('Folder opened!'))
-            .catch(console.error)
-        );
-        document.querySelector('.copyBtnContainer').appendChild(button);
+    // ── VSC-Ordner-Öffner ────────────────────────────────────────────
+    // Linksklick auf den Pfad-Button fragt den lokalen ipsi-vsc-helper
+    // (läuft auf 127.0.0.1:48620), listet die Ordner im kopierten Pfad und
+    // öffnet sie als neues Fenster in Visual Studio Code.
+    const VSC_HELPER_URL = 'http://127.0.0.1:48620';
+
+    const vscFetch = (route, options = {}, timeout = 30000, hint = 'Einen Moment – Laufwerk wird geweckt…') => { // fetch mit Timeout; der Weckdienst für getrennte Netzlaufwerke darf sich Zeit nehmen
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeout);
+        const wakeHint = setTimeout(() => showNotification(hint, 'info'), 1500); // dezenter Hinweis, falls es länger dauert
+        return fetch(`${VSC_HELPER_URL}${route}`, { ...options, signal: controller.signal })
+            .finally(() => { clearTimeout(timer); clearTimeout(wakeHint); });
+    };
+
+    const vscWakeHint = (p) => `Einen Moment – Laufwerk ${String(p).charAt(0).toUpperCase()}: wird geweckt…`; // der Buchstabe stammt immer aus dem Pfad selbst (= copy_drive)
+
+    const vscJoinPath = (base, name) => `${base.replace(/[\\/]+$/, '')}\\${name}`;
+
+    const vscScanAndOpen = (folderPath, edo) => { // Hauptablauf beim Linksklick auf den Pfad-Button
+        if (!settings.vsc_open) return; // Feature ist per Settings-Schalter deaktivierbar (Standard: aus)
+        closeVscChooser(true);
+        vscFetch(`/scan?path=${encodeURIComponent(folderPath)}`, {}, undefined, vscWakeHint(folderPath))
+            .then(response => response.json())
+            .then(res => {
+                if (res.status === 'not_found') return showNotification(`Pfad nicht gefunden: ${folderPath}${res.reason ? ` – ${res.reason}` : ''}`, 'danger');
+                if (res.status !== 'ok') return showNotification(`VSC-Helper: ${res.message || 'Unbekannter Fehler'}`, 'danger');
+                const folders = res.folders || [];
+                if (folders.length === 0) return showNotification('Keine Ordner im Pfad gefunden', 'warning');
+                if (folders.length === 1) return vscOpenInCode(vscJoinPath(res.path, folders[0])); // genau ein Ordner → direkt öffnen
+                showVscChooser(res.path, folders, edo); // mehrere Ordner → Auswahl anzeigen
+            })
+            .catch(err => showNotification(err && err.name === 'AbortError' ? 'VSC-Helper: Zeitüberschreitung' : 'VSC-Helper nicht erreichbar (läuft er?)', 'danger'));
+    };
+
+    const vscOpenInCode = (folderPath) => { // öffnet den Ordner als neues VS-Code-Fenster (über den Helfer)
+        vscFetch('/open', { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: folderPath }, undefined, vscWakeHint(folderPath))
+            .then(response => response.json())
+            .then(res => {
+                if (res.status === 'ok') showNotification(`VS Code öffnet: ${res.name || folderPath}`);
+                else showNotification(`VSC-Helper: ${res.message || 'Ordner konnte nicht geöffnet werden'}`, 'danger');
+            })
+            .catch(() => showNotification('VSC-Helper nicht erreichbar', 'danger'));
+    };
+
+    const vscOpenInExplorer = (folderPath) => { // öffnet den Pfad als Ordner im Windows-Explorer (über den Helfer)
+        vscFetch('/open-explorer', { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: folderPath }, undefined, vscWakeHint(folderPath))
+            .then(response => response.json())
+            .then(res => {
+                if (res.status === 'ok') showNotification(`Explorer öffnet: ${res.name || folderPath}`);
+                else showNotification(`VSC-Helper: ${res.message || 'Ordner konnte nicht geöffnet werden'}`, 'danger');
+            })
+            .catch(err => showNotification(err && err.name === 'AbortError' ? 'VSC-Helper: Zeitüberschreitung' : 'VSC-Helper nicht erreichbar', 'danger'));
+    };
+
+    const showVscChooser = (basePath, folders, edo) => { // Auswahl-Popup, wenn der Pfad mehrere Ordner enthält
+        closeVscChooser(true); // evtl. offene Auswahl sofort ersetzen
+        const popup = document.createElement('div');
+        popup.className = 'cb_vsc_popup';
+
+        const closeBtn = document.createElement('span');
+        closeBtn.className = 'cb_vsc_close glyphicon glyphicon-remove';
+        closeBtn.title = 'Auswahl schließen';
+        closeBtn.addEventListener('click', () => closeVscChooser());
+
+        const title = document.createElement('span');
+        title.className = 'cb_vsc_title';
+
+        // Pfad-Zeile – das EDO-Segment wird (wenn erkennbar) als Dropdown gerendert
+        let currentBase = basePath.replace(/[\\/]+$/, '');
+        const segments = currentBase.split('\\');
+        const edoIndex = edo ? segments.findIndex(segment => segment.toLowerCase() === String(edo).toLowerCase()) : -1;
+
+        const pathEl = document.createElement('span');
+        pathEl.className = 'cb_vsc_path';
+        pathEl.title = `${currentBase}\\`;
+
+        const list = document.createElement('div');
+        list.className = 'cb_vsc_list';
+
+        let scanToken = 0; // bei schnellem Hin- und Herwechseln zählt nur das letzte Ergebnis
+
+        const renderMessage = (text, type) => {
+            const message = document.createElement('span');
+            message.className = `cb_vsc_msg${type ? ` ${type}` : ''}`;
+            message.textContent = text;
+            list.appendChild(message);
+        };
+
+        const renderList = (folderNames) => {
+            list.innerHTML = '';
+            title.textContent = `${folderNames.length} Ordner gefunden`;
+            if (!folderNames.length) return renderMessage('Keine Ordner im Pfad gefunden', 'warn');
+            folderNames.forEach(name => {
+                const item = document.createElement('button');
+                item.type = 'button';
+                item.className = 'cb_vsc_item';
+                item.innerHTML = '<span class="glyphicon glyphicon-folder-open"></span> ';
+                item.appendChild(document.createTextNode(name));
+                item.title = `"${name}" als neues Projekt in VS Code öffnen`;
+                item.addEventListener('click', () => {
+                    closeVscChooser();
+                    vscOpenInCode(vscJoinPath(currentBase, name));
+                });
+                list.appendChild(item);
+            });
+        };
+
+        const rescan = () => { // Projekt-Ordner im (neu) gewählten EDO suchen
+            const token = ++scanToken;
+            title.textContent = 'Suche Ordner…';
+            list.innerHTML = '';
+            vscFetch(`/scan?path=${encodeURIComponent(`${currentBase}\\`)}`, {}, undefined, vscWakeHint(currentBase))
+                .then(response => response.json())
+                .then(res => {
+                    if (token !== scanToken) return; // inzwischen wurde erneut gewechselt
+                    if (res.status === 'not_found') {
+                        title.textContent = 'Pfad nicht gefunden';
+                        return renderMessage(res.reason || 'Der Pfad existiert in diesem EDO nicht', 'error');
+                    }
+                    if (res.status !== 'ok') {
+                        title.textContent = 'Fehler';
+                        return renderMessage(res.message || 'Unbekannter Fehler', 'error');
+                    }
+                    renderList(res.folders || []);
+                })
+                .catch(err => {
+                    if (token !== scanToken) return;
+                    title.textContent = 'Fehler';
+                    renderMessage(err && err.name === 'AbortError' ? 'VSC-Helper: Zeitüberschreitung' : 'VSC-Helper nicht erreichbar', 'error');
+                });
+        };
+
+        if (edoIndex > 0) {
+            const prefix = document.createElement('span');
+            prefix.className = 'cb_vsc_path_part';
+            prefix.textContent = `${segments.slice(0, edoIndex).join('\\')}\\`;
+
+            const edoSelect = document.createElement('select');
+            edoSelect.className = 'cb_vsc_edo_select';
+            edoSelect.title = 'EDO wechseln – die Projekt-Ordner werden dort neu gesucht';
+            const currentOption = document.createElement('option');
+            currentOption.value = segments[edoIndex];
+            currentOption.textContent = segments[edoIndex];
+            edoSelect.appendChild(currentOption);
+
+            const rest = segments.slice(edoIndex + 1).join('\\');
+            const suffix = document.createElement('span');
+            suffix.className = 'cb_vsc_path_part';
+            suffix.textContent = rest ? `\\${rest}\\` : '\\';
+
+            pathEl.append(prefix, edoSelect, suffix);
+
+            // Die anderen EDO-Ordner (Nachbarordner des aktuellen EDO) über den Helfer nachladen
+            const parentPath = `${segments.slice(0, edoIndex).join('\\')}\\`;
+            vscFetch(`/scan?path=${encodeURIComponent(parentPath)}`, {}, undefined, vscWakeHint(parentPath))
+                .then(response => response.json())
+                .then(res => {
+                    if (res.status !== 'ok' || !Array.isArray(res.folders) || !res.folders.length) return;
+                    const current = edoSelect.value;
+                    const names = res.folders.slice();
+                    if (!names.some(name => name.toLowerCase() === current.toLowerCase())) names.unshift(current);
+                    edoSelect.innerHTML = '';
+                    names.forEach(name => {
+                        const option = document.createElement('option');
+                        option.value = name;
+                        option.textContent = name;
+                        option.selected = name.toLowerCase() === current.toLowerCase();
+                        edoSelect.appendChild(option);
+                    });
+                })
+                .catch(() => {}); // dann bleibt eben nur das aktuelle EDO im Dropdown
+
+            edoSelect.addEventListener('change', () => {
+                segments[edoIndex] = edoSelect.value;
+                currentBase = segments.join('\\');
+                pathEl.title = `${currentBase}\\`;
+                rescan();
+            });
+        } else { // EDO im Pfad nicht erkennbar → Pfad wie bisher als reiner Text
+            pathEl.classList.add('cb_vsc_path_plain');
+            pathEl.textContent = `${currentBase}\\`;
+        }
+
+        renderList(folders);
+        popup.append(closeBtn, title, pathEl, list);
+
+        // Position: direkt über den Copy-Buttons (gleiche Rechnung wie bei den Notifications)
+        const user_bar = document.querySelector('user-bar');
+        const casbar_height = user_bar.shadowRoot.querySelector('.casbar-wrapper').clientHeight;
+        const copyPath_height = document.querySelector('#copyPath')?.clientHeight || 34;
+        if (settings.button_position) {
+            popup.style.right = settings.button_position_space;
+            popup.style.bottom = `calc((${settings.button_position_space} * 2) + (${casbar_height} * 1px) + (${copyPath_height} * 1px))`;
+        } else {
+            popup.style.right = '10px';
+            popup.style.bottom = `calc(25vh + ${copyPath_height}px + 10px)`;
+        }
+
+        document.body.appendChild(popup);
+        requestAnimationFrame(() => requestAnimationFrame(() => popup.classList.add('open'))); // doppeltes rAF für eine saubere Einblende-Animation
+        setTimeout(() => {
+            document.addEventListener('mousedown', vscChooserOutsideClick);
+            document.addEventListener('keydown', vscChooserEscClose);
+        }, 0);
+    };
+
+    const closeVscChooser = (instant = false) => {
+        document.removeEventListener('mousedown', vscChooserOutsideClick);
+        document.removeEventListener('keydown', vscChooserEscClose);
+        const popup = document.querySelector('.cb_vsc_popup');
+        if (!popup) return;
+        if (instant) return popup.remove();
+        popup.classList.remove('open');
+        setTimeout(() => popup.remove(), 300);
+    };
+    const vscChooserOutsideClick = (event) => {
+        const popup = document.querySelector('.cb_vsc_popup');
+        if (popup && !popup.contains(event.target) && event.target.id !== 'copyPath') closeVscChooser();
+    };
+    const vscChooserEscClose = (event) => {
+        if (event.key === 'Escape') closeVscChooser();
+    };
+
+    // ── Rechtsklick-Menü am Pfad-Button ("Mit VSC öffnen" / "Im Explorer öffnen") ──
+    const showVscCtxMenu = (event, folderPath, edo) => {
+        closeVscCtxMenu(true); // evtl. offenes Menü sofort ersetzen
+        closeVscChooser(true); // eine offene Ordner-Auswahl ebenfalls schließen
+        const menu = document.createElement('div');
+        menu.className = 'cb_ctx_menu';
+
+        const makeItem = (iconClass, label, action) => {
+            const item = document.createElement('button');
+            item.type = 'button';
+            item.className = 'cb_vsc_item';
+            item.innerHTML = `<span class="glyphicon ${iconClass}"></span> `;
+            item.appendChild(document.createTextNode(label));
+            item.addEventListener('click', () => {
+                closeVscCtxMenu();
+                action();
+            });
+            return item;
+        };
+        menu.appendChild(makeItem('glyphicon-new-window', 'Mit VSC öffnen', () => vscScanAndOpen(folderPath, edo)));
+        menu.appendChild(makeItem('glyphicon-folder-open', 'Im Explorer öffnen', () => vscOpenInExplorer(folderPath)));
+
+        // Menü öffnet nach oben-links vom Mauszeiger (Buttons sitzen unten rechts)
+        menu.style.right = `${Math.max(6, window.innerWidth - event.clientX)}px`;
+        menu.style.bottom = `${Math.max(6, window.innerHeight - event.clientY)}px`;
+
+        document.body.appendChild(menu);
+        requestAnimationFrame(() => requestAnimationFrame(() => menu.classList.add('open')));
+        setTimeout(() => {
+            document.addEventListener('mousedown', vscCtxOutsideClick);
+            document.addEventListener('keydown', vscCtxEscClose);
+        }, 0);
+    };
+    const closeVscCtxMenu = (instant = false) => {
+        document.removeEventListener('mousedown', vscCtxOutsideClick);
+        document.removeEventListener('keydown', vscCtxEscClose);
+        const menu = document.querySelector('.cb_ctx_menu');
+        if (!menu) return;
+        if (instant) return menu.remove();
+        menu.classList.remove('open');
+        setTimeout(() => menu.remove(), 300);
+    };
+    const vscCtxOutsideClick = (event) => {
+        const menu = document.querySelector('.cb_ctx_menu');
+        if (menu && !menu.contains(event.target)) closeVscCtxMenu();
+    };
+    const vscCtxEscClose = (event) => {
+        if (event.key === 'Escape') closeVscCtxMenu();
     };
 
     const createSettings = () => {
@@ -455,7 +727,7 @@
                 display: flex;
                 max-width: fit-content;
                 color: var(--cb_font);
-                font-family: 'Actor', monospace, sans-serif;
+                font-family: sans-serif;
                 font-weight: bolder;
                 transition: color 0.25s ease-in-out;
                 user-select: none;
@@ -466,7 +738,7 @@
             }
             .cb_container .cb_settings .cb_setting .setting_title {
                 display: inline-block;
-                min-width: 185px;
+                min-width: 230px;
                 font-size: 18px;
             }
             .cb_container .cb_settings .cb_setting input:not([type="text"]) {
@@ -812,10 +1084,176 @@
             .cb_container .cb_side_container.open .cb_ls_content {
                 max-height: calc(50vh - 40px);
             }
+            .cb_container .cb_side_container .cb_ls_sort {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 8px;
+                width: fit-content;
+                padding: 6px 0 8px;
+            }
+            .cb_container .cb_side_container .cb_ls_sort label {
+                color: var(--cb_font_active);
+                font-size: 11px;
+                white-space: nowrap;
+                margin: 0;
+            }
+            .cb_container .cb_side_container .cb_ls_sort select {
+                flex: 1 1 auto;
+                min-width: 0;
+                background: var(--cb_marking_clr);
+                color: var(--cb_font_active);
+                padding: 6px;
+                border-radius: calc(var(--cb_switch_height) / 3);
+                cursor: pointer;
+            }
             .cb_info-sign {
                 top: 0;
                 font-size: 12px;
                 color: var(--cb_font);
+            }
+            /* ── VSC-Ordner-Auswahl (Popup vom Pfad-Button) ── */
+            .cb_vsc_popup {
+                position: fixed;
+                display: flex;
+                flex-direction: column;
+                min-width: 230px;
+                max-width: 340px;
+                padding: 12px 14px;
+                background: var(--cb_background);
+                color: var(--cb_font_active);
+                border-radius: 15px;
+                text-shadow: 0 1px 0 rgb(${text_shadow});
+                box-shadow: 0 -1px 1px 0 rgba(0, 0, 0, .25) inset, 0 1px 1px 0 rgba(255, 255, 255, .25) inset, 0 4px 18px rgba(0, 0, 0, .25);
+                z-index: 1001;
+                transform: scale(0.000001);
+                transform-origin: bottom right;
+                transition: transform 0.35s ${bouncy_transition},
+                            background-color 0.25s ease-in-out;
+            }
+            .cb_vsc_popup.open {
+                transform: scale(1);
+            }
+            .cb_vsc_popup .cb_vsc_close {
+                position: absolute;
+                top: 0;
+                right: 0;
+                padding: 12px;
+                font-size: 10px;
+                color: var(--cb_font);
+                cursor: pointer;
+            }
+            .cb_vsc_popup .cb_vsc_title {
+                font-weight: bold;
+                padding-right: 20px;
+            }
+            .cb_vsc_popup .cb_vsc_path {
+                display: flex;
+                align-items: center;
+                flex-wrap: wrap;
+                gap: 3px;
+                color: var(--cb_font);
+                font-size: 11px;
+                margin: 2px 0 8px;
+            }
+            .cb_vsc_popup .cb_vsc_path.cb_vsc_path_plain {
+                display: block;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+                direction: rtl;
+                text-align: left;
+            }
+            .cb_vsc_popup .cb_vsc_path .cb_vsc_path_part {
+                white-space: nowrap;
+            }
+            .cb_vsc_popup .cb_vsc_edo_select {
+                background: var(--cb_marking_clr);
+                color: var(--cb_font_active);
+                border: 0;
+                padding: 2px 4px;
+                border-radius: 5px;
+                font-size: 11px;
+                cursor: pointer;
+            }
+            .cb_vsc_popup .cb_vsc_msg {
+                color: var(--cb_font);
+                font-size: 12px;
+                padding: 4px 2px;
+            }
+            .cb_vsc_popup .cb_vsc_msg.error {
+                color: #d9534f;
+            }
+            .cb_vsc_popup .cb_vsc_msg.warn {
+                color: #f0ad4e;
+            }
+            /* ── Rechtsklick-Menü am Pfad-Button ── */
+            .cb_ctx_menu {
+                position: fixed;
+                display: flex;
+                flex-direction: column;
+                gap: 4px;
+                min-width: 175px;
+                padding: 8px;
+                background: var(--cb_background);
+                color: var(--cb_font_active);
+                border-radius: 12px;
+                text-shadow: 0 1px 0 rgb(${text_shadow});
+                box-shadow: 0 -1px 1px 0 rgba(0, 0, 0, .25) inset, 0 1px 1px 0 rgba(255, 255, 255, .25) inset, 0 4px 18px rgba(0, 0, 0, .25);
+                z-index: 1002;
+                transform: scale(0.000001);
+                transform-origin: bottom right;
+                transition: transform 0.3s ${bouncy_transition},
+                            background-color 0.25s ease-in-out;
+            }
+            .cb_ctx_menu.open {
+                transform: scale(1);
+            }
+            .cb_vsc_popup .cb_vsc_list {
+                display: flex;
+                flex-direction: column;
+                gap: 4px;
+                max-height: 40vh;
+                overflow: auto;
+            }
+            .cb_vsc_popup .cb_vsc_list::-webkit-scrollbar {
+                width: 13px;
+            }
+            .cb_vsc_popup .cb_vsc_list::-webkit-scrollbar-track {
+                background: var(--cb_background);
+                border: 3px solid transparent;
+            }
+            .cb_vsc_popup .cb_vsc_list::-webkit-scrollbar-thumb {
+                background: var(--cb_font);
+                border: 4px solid transparent;
+                border-radius: 100px;
+                background-clip: content-box;
+            }
+            .cb_vsc_popup .cb_vsc_list::-webkit-scrollbar-button {
+                height: 0;
+                width: 0;
+            }
+            .cb_vsc_popup .cb_vsc_item, .cb_ctx_menu .cb_vsc_item {
+                display: block;
+                width: 100%;
+                border: 0;
+                text-align: left;
+                background: var(--cb_marking_clr);
+                color: var(--cb_font_active);
+                padding: 8px 10px;
+                border-radius: 8px;
+                cursor: pointer;
+                transition: background-color 0.15s ease-in-out, color 0.15s ease-in-out;
+            }
+            .cb_vsc_popup .cb_vsc_item:hover, .cb_ctx_menu .cb_vsc_item:hover {
+                background: var(--cb_active);
+                color: #fff;
+            }
+            .cb_vsc_popup .cb_vsc_item .glyphicon, .cb_ctx_menu .cb_vsc_item .glyphicon {
+                font-size: 11px;
+                margin-right: 6px;
+                opacity: .8;
+                top: 1px;
             }
         `;
         }
@@ -866,6 +1304,13 @@
                 <div class="cb_ls_container cb_side_container">
                     <span class="cb_side_close_btn glyphicon glyphicon-remove" title="Übersicht schließen"></span>
                     <span class="settings_title">Projekte</span>
+                    <div class="cb_ls_sort">
+                        <label for="cb_ls_sort_select">Sortieren:</label>
+                        <select id="cb_ls_sort_select" title="Projekte hiernach sortieren – dieser Wert wird im Label vor dem Projektlink angezeigt">
+                            <option value="project_id">Projekt-ID</option>
+                            <option value="client_id">Kunden-ID</option>
+                        </select>
+                    </div>
                     <div class="cb_ls_content cb_side_content">
                     </div>
                     <button id="cb_ls_delete_btn" class="glyphicon glyphicon-trash" title="Markierte Projekte aus dem lokalen Speicher entfernen"></button>
@@ -969,6 +1414,22 @@
                 </div>
 
                 <div class="cb_setting">
+                    <input type="checkbox" id="vsc_open" name="vsc-open"/>
+                    <label class="cb_switch" for="vsc_open">
+                        <span class="setting_title">VSC-Ordner-Öffner <span class="glyphicon glyphicon-info-sign cb_info-sign" title="Linksklick auf den Pfad-Button listet die Ordner im Pfad und öffnet sie direkt in Visual Studio Code (als neues Fenster).&#013;Bei mehreren Ordnern erscheint eine Auswahl, bei genau einem Ordner öffnet er sich sofort.&#013;Rechtsklick öffnet ein Menü: Mit VSC öffnen / Im Explorer öffnen.&#013;Benötigt den lokalen ipsi-vsc-helper (127.0.0.1:48620)."></span></span>
+                        <span class="box"></span>
+                    </label>
+                </div>
+
+                <div class="cb_setting">
+                    <input type="checkbox" id="sandbox_check" name="sandbox-check"/>
+                    <label class="cb_switch" for="sandbox_check">
+                        <span class="setting_title">Sandbox Check <span class="glyphicon glyphicon-info-sign cb_info-sign" title="Öffnet beim Laden der Projektseite nacheinander alle Formix-Einträge, prüft ob die Sandbox aktiviert ist und schließt das Popup direkt wieder (es wird nichts gespeichert).&#013;Das Ergebnis wird in der Status-Spalte markiert: checked (grün) / unchecked (gelb).&#013;Der Formix-Schnellbutton aktualisiert die Markierung immer – unabhängig von diesem Schalter."></span></span>
+                        <span class="box"></span>
+                    </label>
+                </div>
+
+                <div class="cb_setting">
                     <label class="cb_switch" for="cb_default_email_client">
                         <span class="setting_title always_active">E-Mail Client <span class="glyphicon glyphicon-info-sign cb_info-sign" title="Gib an, ob das veschicken von E-Mail über die Outlook-App oder den Browser laufen soll."></span></span>
                         <select id="cb_default_email_client" class="box" name="cb_default_email_client">
@@ -1063,50 +1524,69 @@
         function loadLocalStorageItems() { // Funktion für den localStorage-Manager
             const container = document.querySelector('.cb_ls_content');
             container.innerHTML = ''; // leere Container (nur für den Fall, dass die Liste neu geladen wird... sehe Funktion "deleteSelectedItems()")
-            const numericKeysArray = [];
 
+            const sortField = (document.querySelector('#cb_ls_sort_select')?.value) || settings.ls_sort || 'project_id'; // aktuelles Sortierkriterium ('project_id' oder 'client_id')
+
+            const items = []; // erst alle Projekte (nur numerische Keys) einsammeln, dann sortiert ausgeben
             for (let i = 0; i < localStorage.length; i++) {
                 const key = localStorage.key(i);
 
                 if (/^\d+$/.test(key)) { // Checken, ob "Key" nur aus Nummern besteht
                     const value = localStorage.getItem(key);
-                    numericKeysArray.push({ key, value });
-
-                    const label = document.createElement('label');
-                    const checkbox = document.createElement('input');
-                    checkbox.type = 'checkbox';
-                    checkbox.setAttribute('data-key', key); // "Key" als value für data attribute "data-key" setzten
-
                     const value_obj = JSON.parse(value);
 
                     // Ältere Versionen (alle unter 0.82) nutzen "url_id" als Key für Projekt-ID, anstatt "project_id". Das wird hier angepasst ("url_id" → "project_id).
                     if ('url_id' in value_obj) value_obj.project_id = value_obj.url_id;
 
-                    const objChecker = {
-                        client_id: `KD-ID: ${value_obj.client_id}`,
-                        client_domain: `KD-DOMAIN: ${value_obj.client_domain}`,
-                        client_brand: `KD-BRAND: ${value_obj.client_brand}`,
-                        client_name: `KD-NAME: ${value_obj.client_name}`,
-                        client_street: `KD-STRAßE: ${value_obj.client_street}`,
-                        client_location: `KD-ORT: ${value_obj.client_location}`,
-                        client_email: `KD-EMAIL: ${value_obj.client_email}`,
-                        project_id: `PROJ-ID: ${value_obj.project_id}`,
-                        project_brand: `PROJ-BRAND: ${value_obj.project_brand}`,
-                        project_type: `PROJ-TYP: ${value_obj.project_type}`
-                    };
-
-                    let project_btnTitle = Object.entries(objChecker) // title-Content konstruieren und nur elemente einsetzten, wenn vorhandene (bzw. wenn nicht "undefined")
-                        .filter(([key, value]) => value_obj[key] !== undefined)
-                        .map(([_, formattedValue]) => formattedValue + '&#013')
-                        .join('');
-
-                    label.innerHTML = `${key} | <a href="/project/detailed/${key}" title="Link zur Projekt-Seite ${key}" target="_blank">Projektlink</a> <span class="glyphicon glyphicon-info-sign cb_info-sign" title="${project_btnTitle}"></span>`;
-
-                    label.appendChild(checkbox);
-                    // label.appendChild(document.createTextNode(`${key}`));
-                    container.appendChild(label);
+                    items.push({ key, value_obj });
                 }
             }
+
+            // Nach dem gewählten Kriterium sortieren. Für 'project_id' nutzen wir den Key (= Projekt-ID), sonst das jeweilige Feld (z.B. client_id).
+            const sortValueOf = (item) => sortField === 'project_id' ? item.key : (item.value_obj[sortField] ?? '');
+            items.sort((a, b) => {
+                const av = String(sortValueOf(a)).trim();
+                const bv = String(sortValueOf(b)).trim();
+                if (!av && !bv) return 0;
+                if (!av) return 1;  // leere Werte ans Ende
+                if (!bv) return -1;
+                return av.localeCompare(bv, undefined, { numeric: true, sensitivity: 'base' }); // numerisch-bewusst (2 vor 10)
+            });
+
+            items.forEach(({ key, value_obj }) => {
+                const label = document.createElement('label');
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.setAttribute('data-key', key); // "Key" als value für data attribute "data-key" setzten
+
+                const objChecker = {
+                    client_id: `KD-ID: ${value_obj.client_id}`,
+                    client_domain: `KD-DOMAIN: ${value_obj.client_domain}`,
+                    client_brand: `KD-BRAND: ${value_obj.client_brand}`,
+                    client_name: `KD-NAME: ${value_obj.client_name}`,
+                    client_street: `KD-STRAßE: ${value_obj.client_street}`,
+                    client_location: `KD-ORT: ${value_obj.client_location}`,
+                    client_email: `KD-EMAIL: ${value_obj.client_email}`,
+                    project_id: `PROJ-ID: ${value_obj.project_id}`,
+                    project_brand: `PROJ-BRAND: ${value_obj.project_brand}`,
+                    project_type: `PROJ-TYP: ${value_obj.project_type}`
+                };
+
+                let project_btnTitle = Object.entries(objChecker) // title-Content konstruieren und nur elemente einsetzten, wenn vorhandene (bzw. wenn nicht "undefined")
+                    .filter(([key, value]) => value_obj[key] !== undefined)
+                    .map(([_, formattedValue]) => formattedValue + '&#013')
+                    .join('');
+
+                // Führender Wert im Label: bei 'project_id' die Projekt-ID (= Key), sonst der gewählte Wert (z.B. Kunden-ID). Fehlt der Wert, zeigen wir "–".
+                const rawLeadValue = sortField === 'project_id' ? key : value_obj[sortField];
+                const leadValue = (rawLeadValue !== undefined && String(rawLeadValue).trim() !== '') ? rawLeadValue : '–';
+
+                label.innerHTML = `${leadValue} | <a href="/project/detailed/${key}" title="Link zur Projekt-Seite ${key}" target="_blank">Projektlink</a> <span class="glyphicon glyphicon-info-sign cb_info-sign" title="${project_btnTitle}"></span>`;
+
+                label.appendChild(checkbox);
+                // label.appendChild(document.createTextNode(`${key}`));
+                container.appendChild(label);
+            });
         }
         function dragSelectItems() { // Funktion um labels beim dragen zu checken
             const container = document.querySelector('.cb_ls_content');
@@ -1145,6 +1625,15 @@
                 localStorage.removeItem(key); // Item aus localStorage entfernen
             });
             loadLocalStorageItems(); // Projekt-Liste neu ausgeben (weil Projekte gelöscht wurden)
+        }
+        const cb_ls_sort_select = document.querySelector('#cb_ls_sort_select'); // Sortier-Dropdown der Projekt-Auflistung
+        if (cb_ls_sort_select) {
+            cb_ls_sort_select.value = settings.ls_sort || 'project_id'; // gespeichertes Sortierkriterium übernehmen
+            cb_ls_sort_select.addEventListener('change', function() {
+                settings.ls_sort = this.value; // Auswahl merken...
+                localStorage.setItem('settings', JSON.stringify(settings)); // ...und im lokalen Speicher speichern
+                loadLocalStorageItems(); // Liste neu sortieren und mit dem gewählten Wert im Label ausgeben
+            });
         }
         loadLocalStorageItems();
         dragSelectItems();
@@ -1634,6 +2123,8 @@
         document.querySelector('#copy_work_button').checked = settings.copy_work_button;
         document.querySelector('#copy_icon').checked = settings.copy_icon;
         document.querySelector('#delete_button').checked = settings.delete_button;
+        document.querySelector('#vsc_open').checked = settings.vsc_open;
+        document.querySelector('#sandbox_check').checked = settings.sandbox_check;
 
         const popupColor = document.querySelector('.color_btn.popup_btn');
         popupColor.className = 'color_btn popup_btn';
@@ -1700,6 +2191,146 @@
             }
         });
     };
+
+    // ─── Formix Sandbox-Check ────────────────────────────────────────────────
+    // Öffnet Formix-Einträge über den formixEdit-Button, liest die Sandbox-
+    // Checkbox aus, schließt das Popup direkt wieder und markiert das Ergebnis
+    // hinter dem Status-Text: "checked" (grün) bzw. "unchecked" (gelb).
+    const cbWaitFor = (conditionFn, timeoutMs = 10000, intervalMs = 100) => new Promise((resolve) => { // pollt, bis die Bedingung etwas Truthy liefert (oder Timeout → null)
+        const started = Date.now();
+        const timer = setInterval(() => {
+            let result = null;
+            try { result = conditionFn(); } catch (e) { /* Bedingung darf scheitern */ }
+            if (result) { clearInterval(timer); resolve(result); }
+            else if (Date.now() - started > timeoutMs) { clearInterval(timer); resolve(null); }
+        }, intervalMs);
+    });
+
+    const waitForQuietDom = (element, quietMs = 1200, maxMs = 12000) => new Promise((resolve) => { // wartet, bis in einem Element eine Weile keine DOM-Änderungen mehr passieren (= fertig geladen)
+        let finished = false;
+        let timer = null;
+        const done = () => {
+            if (finished) return;
+            finished = true;
+            clearTimeout(timer);
+            observer.disconnect();
+            resolve(true);
+        };
+        const observer = new MutationObserver(() => { clearTimeout(timer); timer = setTimeout(done, quietMs); });
+        observer.observe(element, { childList: true, subtree: true });
+        timer = setTimeout(done, quietMs);
+        setTimeout(done, maxMs); // Sicherheitsnetz: nicht ewig warten
+    });
+
+    const getFormixStatusCell = (row) => { // Status-Zelle über die Spaltenüberschrift der Tabelle finden
+        const table = row.closest('table');
+        if (!table) return null;
+        const headers = Array.from(table.querySelectorAll('thead th'));
+        let index = headers.findIndex(th => th.textContent.trim().toLowerCase() === 'status');
+        if (index === -1) index = headers.findIndex(th => th.textContent.toLowerCase().includes('status'));
+        return index >= 0 ? (row.cells[index] || null) : null;
+    };
+
+    const formixSandboxResults = new Map(); // formixEdit-Href → Sandbox aktiv (true/false); übersteht das Neuladen der Tabelle
+
+    const getFormixResultForLink = (href) => { // Ergebnis zum Edit-Link finden – notfalls über die Formix-ID (letztes URL-Segment), falls action und href unterschiedlich geschrieben sind
+        if (formixSandboxResults.has(href)) return formixSandboxResults.get(href);
+        const id = String(href || '').split('/').filter(Boolean).pop();
+        if (!id) return undefined;
+        for (const [key, value] of formixSandboxResults) {
+            if (String(key).split('/').filter(Boolean).pop() === id) return value;
+        }
+        return undefined;
+    };
+
+    const applyFormixSandboxLabels = () => { // gemerkte Markierungen (wieder) einsetzen – idempotent, damit der MutationObserver nicht endlos feuert
+        document.querySelectorAll('table#formixTable > tbody > tr').forEach(row => {
+            const editLink = row.querySelector('a.btn.formixEdit');
+            if (!editLink) return;
+            const result = getFormixResultForLink(editLink.getAttribute('href'));
+            if (result === undefined) return; // dieser Eintrag wurde (noch) nicht geprüft
+            const cell = getFormixStatusCell(row);
+            if (!cell) return;
+            const existing = cell.querySelector('.cb_sandbox_label');
+            if (existing && existing.classList.contains(result ? 'label-success' : 'label-danger')) return; // schon korrekt → nichts anfassen
+            if (existing) existing.remove(); // Zustand hat sich geändert → Markierung ersetzen
+            cell.insertAdjacentHTML('beforeend', result
+                ? ' <span class="label label-success cb_sandbox_label">checked</span>'
+                : ' <span class="label label-danger cb_sandbox_label">unchecked</span>');
+        });
+    };
+
+    const recordFormixSandboxResult = (editHref, isChecked) => { // Ergebnis merken und sofort anzeigen
+        if (!editHref) return;
+        formixSandboxResults.set(editHref, !!isChecked);
+        applyFormixSandboxLabels();
+    };
+
+    // Allgemein: Sobald das Formix-Popup geschlossen wird – egal ob durch Speichern,
+    // Abbrechen, das X oder sonstwie – wird der Sandbox-Stand aus dem (noch im DOM
+    // stehenden) #formix-form gelesen und die Markierung des Eintrags aktualisiert.
+    // Schlüssel ist die action des Formulars (= dieselbe Edit-URL wie der formixEdit-Link).
+    let formixModalWatched = null; // das aktuell beobachtete Modal-Element (wird neu verkabelt, falls die Seite es austauscht)
+    const attachFormixModalWatcher = () => {
+        const modalEl = document.querySelector('#formixModal');
+        if (!modalEl || modalEl === formixModalWatched) return;
+        formixModalWatched = modalEl;
+        let wasOpen = modalEl.classList.contains('in');
+        new MutationObserver(() => {
+            const isOpen = modalEl.classList.contains('in');
+            if (wasOpen && !isOpen) { // Popup wurde gerade geschlossen
+                const form = modalEl.querySelector('#formix-form');
+                const sandboxCb = form ? form.querySelector('[type="checkbox"][name="sandbox"]') : null;
+                if (form && sandboxCb) recordFormixSandboxResult(form.getAttribute('action'), sandboxCb.checked);
+            }
+            wasOpen = isOpen;
+        }).observe(modalEl, { attributes: true, attributeFilter: ['class'] });
+    };
+
+    let formixSandboxCheckRunning = false;
+    const runFormixSandboxCheck = async () => { // prüft alle Formix nacheinander: öffnen → auslesen → Popup schließen → nächstes (es wird nichts gespeichert)
+        if (formixSandboxCheckRunning) return;
+        const modalEl = document.querySelector('#formixModal');
+        const targets = Array.from(document.querySelectorAll('table#formixTable > tbody > tr a.btn.formixEdit'))
+            .map(link => link.getAttribute('href'))
+            .filter(Boolean);
+        if (!modalEl || !targets.length) return;
+
+        formixSandboxCheckRunning = true;
+        showNotification(`Sandbox-Check läuft (${targets.length} Formix)…`, 'info');
+        let checkedCount = 0;
+        try {
+            for (const href of targets) {
+                // den Edit-Link zu diesem Eintrag frisch suchen – die Tabelle kann sich zwischendurch neu geladen haben
+                const editLink = await cbWaitFor(() => document.querySelector(`table#formixTable a.btn.formixEdit[href="${href}"]`), 15000, 200);
+                if (!editLink) continue;
+
+                const modalBody = modalEl.querySelector('#formixBody');
+                if (modalBody) modalBody.innerHTML = ''; // damit nicht versehentlich das vorherige Formular ausgelesen wird
+                editLink.click();
+
+                // warten, bis das Popup offen und das Formular geladen ist
+                const sandboxCb = await cbWaitFor(() => modalEl.classList.contains('in')
+                    ? modalEl.querySelector('[type="checkbox"][name="sandbox"]')
+                    : null, 12000);
+
+                if (sandboxCb) {
+                    recordFormixSandboxResult(href, sandboxCb.checked);
+                    checkedCount++;
+                }
+
+                // Popup direkt wieder schließen und die Ausblendung abwarten
+                modalEl.querySelector('button.close')?.click();
+                await cbWaitFor(() => modalEl.classList.contains('in') ? null : true, 5000);
+                await new Promise(resolve => setTimeout(resolve, 300)); // Fade/Backdrop ausklingen lassen
+            }
+            applyFormixSandboxLabels(); // falls die Tabelle zwischenzeitlich neu gerendert wurde
+            showNotification(`Sandbox-Check: ${checkedCount}/${targets.length} Formix geprüft`, checkedCount === targets.length ? 'success' : 'warning');
+        } finally {
+            formixSandboxCheckRunning = false;
+        }
+    };
+    // ─────────────────────────────────────────────────────────────────────────
 
     // formixTable: Sandbox-Schnellbutton
     function injectFormixButtons() {
@@ -1788,6 +2419,7 @@
                         const alert = formixBody.querySelector('.alert.alert-success');
                         if (!alert || !alert.textContent.includes('Form saved')) return;
                         sObs.disconnect();
+                        // (Die Sandbox-Markierung aktualisiert sich beim anschließenden Schließen des Popups automatisch – siehe attachFormixModalWatcher)
 
                         // ── 5) Modal schließen ────────────────────────────────
                         modalEl.querySelector('button.close')?.click();
@@ -1834,9 +2466,29 @@
         });
     }
 
+    // Auto-Check beim Laden der Seite (Settings-Schalter "Sandbox Check"):
+    // Der formixContainer wird von der Seite erst mit Verzögerung in den anfangs
+    // leeren panel-body geladen – und das kann beliebig lange dauern. Deshalb
+    // keine feste Wartezeit mehr, sondern ereignisgesteuert: sobald die Formix-
+    // Tabelle auftaucht (egal wann) und der Container zur Ruhe gekommen ist,
+    // startet der Durchlauf genau einmal.
+    let formixAutoCheckStarted = false;
+    const maybeStartFormixAutoCheck = () => {
+        if (formixAutoCheckStarted || !settings.sandbox_check) return;
+        if (!document.querySelector('table#formixTable > tbody > tr a.btn.formixEdit')) return; // Tabelle ist noch nicht geladen
+        formixAutoCheckStarted = true;
+        const container = document.querySelector('#formixContainer')
+            || document.querySelector('table#formixTable')?.closest('.panel')
+            || document.querySelector('table#formixTable')?.parentElement
+            || document.body;
+        waitForQuietDom(container, 1200, 15000).then(() => runFormixSandboxCheck()); // erst loslegen, wenn der formixContainer fertig geladen/gerendert ist
+    };
+
     // Initial + dynamisch (falls Tabelle per AJAX nachgeladen wird)
     injectFormixButtons();
-    const formixObserver = new MutationObserver(() => injectFormixButtons());
+    maybeStartFormixAutoCheck();
+    attachFormixModalWatcher();
+    const formixObserver = new MutationObserver(() => { injectFormixButtons(); applyFormixSandboxLabels(); maybeStartFormixAutoCheck(); attachFormixModalWatcher(); }); // Buttons, gemerkte Markierungen, Auto-Check-Start und Popup-Beobachter nach jedem Neu-Rendern prüfen
     const formixTableParent = document.querySelector('table#formixTable')?.parentElement || document.body;
     formixObserver.observe(formixTableParent, { childList: true, subtree: true });
     // ─────────────────────────────────────────────────────────────────────────

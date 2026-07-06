@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Copy-Buttons
 // @namespace    https://github.com/zentolik
-// @version      0.97
+// @version      0.98
 // @description  doing stuff ʕ·͡ᴥ·ʔ
 // @author       Zentolik
 // @match        https://ipsi.securewebsystems.net/project/detailed/*
@@ -13,7 +13,7 @@
 
 !(function() { // ʕ·͡ᴥ·ʔ hi & ty <3
     'use strict';
-    const SCRIPT_VERSION = '0.97';
+    const SCRIPT_VERSION = '0.98';
     console.log(`ʕ·͡ᴥ·ʔ *bup* v${SCRIPT_VERSION}`);
     let settings = {
         button_position: true, // ändert die position vom btn (wenn auf "false", empfähle ich "copy_icon" zu aktivieren") //
@@ -727,7 +727,7 @@
                 display: flex;
                 max-width: fit-content;
                 color: var(--cb_font);
-                font-family: sans-serif;
+                font-family: 'Actor', monospace, sans-serif;
                 font-weight: bolder;
                 transition: color 0.25s ease-in-out;
                 user-select: none;
@@ -738,7 +738,7 @@
             }
             .cb_container .cb_settings .cb_setting .setting_title {
                 display: inline-block;
-                min-width: 230px;
+                min-width: 185px;
                 font-size: 18px;
             }
             .cb_container .cb_settings .cb_setting input:not([type="text"]) {
@@ -1089,7 +1089,7 @@
                 align-items: center;
                 justify-content: space-between;
                 gap: 8px;
-                width: fit-content;
+                width: 100%;
                 padding: 6px 0 8px;
             }
             .cb_container .cb_side_container .cb_ls_sort label {
@@ -1103,6 +1103,7 @@
                 min-width: 0;
                 background: var(--cb_marking_clr);
                 color: var(--cb_font_active);
+                border: 0;
                 padding: 6px;
                 border-radius: calc(var(--cb_switch_height) / 3);
                 cursor: pointer;
@@ -1305,7 +1306,7 @@
                     <span class="cb_side_close_btn glyphicon glyphicon-remove" title="Übersicht schließen"></span>
                     <span class="settings_title">Projekte</span>
                     <div class="cb_ls_sort">
-                        <label for="cb_ls_sort_select">Sortieren:</label>
+                        <label for="cb_ls_sort_select">Sortieren nach</label>
                         <select id="cb_ls_sort_select" title="Projekte hiernach sortieren – dieser Wert wird im Label vor dem Projektlink angezeigt">
                             <option value="project_id">Projekt-ID</option>
                             <option value="client_id">Kunden-ID</option>
@@ -1424,7 +1425,7 @@
                 <div class="cb_setting">
                     <input type="checkbox" id="sandbox_check" name="sandbox-check"/>
                     <label class="cb_switch" for="sandbox_check">
-                        <span class="setting_title">Sandbox Check <span class="glyphicon glyphicon-info-sign cb_info-sign" title="Öffnet beim Laden der Projektseite nacheinander alle Formix-Einträge, prüft ob die Sandbox aktiviert ist und schließt das Popup direkt wieder (es wird nichts gespeichert).&#013;Das Ergebnis wird in der Status-Spalte markiert: checked (grün) / unchecked (gelb).&#013;Der Formix-Schnellbutton aktualisiert die Markierung immer – unabhängig von diesem Schalter."></span></span>
+                        <span class="setting_title">Sandbox Check <span class="glyphicon glyphicon-info-sign cb_info-sign" title="Öffnet beim Laden der Projektseite nacheinander alle Formix-Einträge, prüft ob die Sandbox aktiviert ist und schließt das Popup direkt wieder (es wird nichts gespeichert).&#013;Das Ergebnis wird in der Status-Spalte markiert: checked (grün) / unchecked (rot).&#013;Der Formix-Schnellbutton aktualisiert die Markierung immer – unabhängig von diesem Schalter."></span></span>
                         <span class="box"></span>
                     </label>
                 </div>
@@ -2195,7 +2196,7 @@
     // ─── Formix Sandbox-Check ────────────────────────────────────────────────
     // Öffnet Formix-Einträge über den formixEdit-Button, liest die Sandbox-
     // Checkbox aus, schließt das Popup direkt wieder und markiert das Ergebnis
-    // hinter dem Status-Text: "checked" (grün) bzw. "unchecked" (gelb).
+    // hinter dem Status-Text: "checked" (grün) bzw. "unchecked" (rot).
     const cbWaitFor = (conditionFn, timeoutMs = 10000, intervalMs = 100) => new Promise((resolve) => { // pollt, bis die Bedingung etwas Truthy liefert (oder Timeout → null)
         const started = Date.now();
         const timer = setInterval(() => {
@@ -2266,22 +2267,54 @@
         applyFormixSandboxLabels();
     };
 
-    // Allgemein: Sobald das Formix-Popup geschlossen wird – egal ob durch Speichern,
-    // Abbrechen, das X oder sonstwie – wird der Sandbox-Stand aus dem (noch im DOM
-    // stehenden) #formix-form gelesen und die Markierung des Eintrags aktualisiert.
-    // Schlüssel ist die action des Formulars (= dieselbe Edit-URL wie der formixEdit-Link).
+    // Markierung nur bei erfolgreichem Speichern übernehmen:
+    // Beim Klick auf "Speichern" (bzw. beim Absenden von #formix-form) wird der
+    // Sandbox-Stand samt Formular-URL zwischengemerkt. Übernommen wird er erst,
+    // wenn die Seite mit "Form saved" bestätigt hat – die Seite ersetzt dabei den
+    // kompletten #formixBody durch die Erfolgsmeldung, das Formular ist danach weg.
+    // Wird das Popup anderweitig geschlossen (X, Schliessen, ESC …), wird der
+    // zwischengemerkte Stand verworfen: Nicht gespeicherte Änderungen landen nie
+    // in der Markierung.
+    let formixPendingSave = null; // { key, checked } – wartet auf die "Form saved"-Bestätigung
+
+    const captureFormixPendingSave = () => { // Stand JETZT lesen, solange das Formular noch im DOM steht
+        const form = document.querySelector('#formixModal #formix-form');
+        const sandboxCb = form ? form.querySelector('[type="checkbox"][name="sandbox"]') : null;
+        if (form && sandboxCb) formixPendingSave = { key: form.getAttribute('action'), checked: sandboxCb.checked };
+    };
+    document.addEventListener('click', (e) => { // Klick auf den Speichern-Button (auch der Schnellbutton klickt ihn programmatisch)
+        if (e.target && e.target.closest && e.target.closest('#formixSave')) captureFormixPendingSave();
+    }, true); // Capture-Phase: läuft garantiert vor den Handlern der Seite
+    document.addEventListener('submit', (e) => { // deckt zusätzlich das Absenden per Enter-Taste ab
+        if (e.target && e.target.id === 'formix-form') captureFormixPendingSave();
+    }, true);
+
+    const isFormixSavedAlertVisible = (modalEl) => {
+        const alert = modalEl.querySelector('#formixBody .alert.alert-success');
+        return !!(alert && alert.textContent.includes('Form saved'));
+    };
+    const commitFormixPendingSave = () => {
+        if (!formixPendingSave) return;
+        recordFormixSandboxResult(formixPendingSave.key, formixPendingSave.checked);
+        formixPendingSave = null;
+    };
+
     let formixModalWatched = null; // das aktuell beobachtete Modal-Element (wird neu verkabelt, falls die Seite es austauscht)
     const attachFormixModalWatcher = () => {
         const modalEl = document.querySelector('#formixModal');
         if (!modalEl || modalEl === formixModalWatched) return;
         formixModalWatched = modalEl;
+
+        new MutationObserver(() => { // "Form saved" erschienen? → zwischengemerkten Stand sofort übernehmen
+            if (formixPendingSave && isFormixSavedAlertVisible(modalEl)) commitFormixPendingSave();
+        }).observe(modalEl, { childList: true, subtree: true });
+
         let wasOpen = modalEl.classList.contains('in');
         new MutationObserver(() => {
             const isOpen = modalEl.classList.contains('in');
             if (wasOpen && !isOpen) { // Popup wurde gerade geschlossen
-                const form = modalEl.querySelector('#formix-form');
-                const sandboxCb = form ? form.querySelector('[type="checkbox"][name="sandbox"]') : null;
-                if (form && sandboxCb) recordFormixSandboxResult(form.getAttribute('action'), sandboxCb.checked);
+                if (formixPendingSave && isFormixSavedAlertVisible(modalEl)) commitFormixPendingSave(); // Sicherheitsnetz, falls die Bestätigung bis hierhin noch nicht verarbeitet wurde
+                formixPendingSave = null; // ohne (erfolgreiches) Speichern geschlossen → nichts übernehmen
             }
             wasOpen = isOpen;
         }).observe(modalEl, { attributes: true, attributeFilter: ['class'] });
@@ -2419,7 +2452,7 @@
                         const alert = formixBody.querySelector('.alert.alert-success');
                         if (!alert || !alert.textContent.includes('Form saved')) return;
                         sObs.disconnect();
-                        // (Die Sandbox-Markierung aktualisiert sich beim anschließenden Schließen des Popups automatisch – siehe attachFormixModalWatcher)
+                        // (Der Sandbox-Stand wurde beim Klick auf Speichern zwischengemerkt und ist mit diesem "Form saved" bereits in die Markierung übernommen worden – siehe attachFormixModalWatcher)
 
                         // ── 5) Modal schließen ────────────────────────────────
                         modalEl.querySelector('button.close')?.click();
@@ -2446,7 +2479,6 @@
 
                         // Sicherheits-Timeout nach 30 s
                         setTimeout(() => {
-                            clearInterval(loadingCheck);
                             loadingObs.disconnect();
                         }, 30000);
                     });

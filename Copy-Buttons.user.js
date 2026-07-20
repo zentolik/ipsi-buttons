@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Copy-Buttons
 // @namespace    https://github.com/zentolik
-// @version      0.98
+// @version      0.99
 // @description  doing stuff ʕ·͡ᴥ·ʔ
 // @author       Zentolik
 // @match        https://ipsi.securewebsystems.net/project/detailed/*
@@ -13,7 +13,7 @@
 
 !(function() { // ʕ·͡ᴥ·ʔ hi & ty <3
     'use strict';
-    const SCRIPT_VERSION = '0.98';
+    const SCRIPT_VERSION = '0.99';
     console.log(`ʕ·͡ᴥ·ʔ *bup* v${SCRIPT_VERSION}`);
     let settings = {
         button_position: true, // ändert die position vom btn (wenn auf "false", empfähle ich "copy_icon" zu aktivieren") //
@@ -137,6 +137,8 @@
                     project_brand,
                     project_type
                 };
+                const previouslyStored = JSON.parse(localStorage.getItem(project_id) || '{}');
+                if (previouslyStored.special_ps) dataToStore.special_ps = previouslyStored.special_ps; // gespeicherte Special-PS beim Neuanlegen der Projektdaten nicht verlieren
                 localStorage.setItem(project_id, JSON.stringify(dataToStore));
                 createButtonContainer();
                 createSettings();
@@ -232,9 +234,15 @@
                 const button = createButton('copyClientdata', settings.copy_icon ? `btn ${color_class} glyphicon glyphicon-send` : `btn ${color_class}`, settings.copy_icon ? '' : data.client_email);
                 button.title = copy;
                 setBtnProperties(button);
+                // Bei Aktualisierungs-/Korrektur-Projekten ist der Button immer der
+                // Aktu-/Korrektur-Absender: department wird dann fest auf
+                // "Team Aktualisierung Berlin" gesetzt – egal, welche Abteilung in den
+                // Userdaten gewählt ist. Der Projekttyp selbst steckt in data.project_type.
+                const projectTypeLc = String(data.project_type || '').toLowerCase();
+                const isAktuProject = projectTypeLc.includes('aktu') || projectTypeLc.includes('korrektur');
                 const extendedData = {
                     ...data,
-                    department: settings.department || ''
+                    department: isAktuProject ? 'Team Aktualisierung Berlin' : (settings.department || '')
                 };
                 button.addEventListener('click', () =>
                     window.open(`https://otrs.euroweb.net/index.pl?Action=AgentTicketEmail#${JSON.stringify(extendedData)}`, '_blank')
@@ -301,9 +309,8 @@
         });
         document.body.appendChild(notification);
         const user_bar = document.querySelector('user-bar');
-        const casbar = user_bar.shadowRoot.querySelector('.casbar-wrapper');
-        const casbar_height = casbar.clientHeight;
-        const copyPath_height = document.querySelector('#copyPath').clientHeight;
+        const casbar_height = user_bar?.shadowRoot?.querySelector('.casbar-wrapper')?.clientHeight || 0;
+        const copyPath_height = document.querySelector('#copyPath')?.clientHeight || 34; // Buttons existieren evtl. noch nicht (Domains-Panel noch zu) → Standard-Buttonhöhe
         const bottomValue = settings.button_position ? `calc((${settings.button_position_space} * 2) + (${casbar_height} * 1px) + (${copyPath_height} * 1px))` : `calc(${casbar_height} * 1px)`;
         const bottomPosition = notifications.length * 18;
         notification.style.bottom = `calc(${bottomPosition}px + ${bottomValue})`;
@@ -1087,10 +1094,13 @@
             .cb_container .cb_side_container .cb_ls_sort {
                 display: flex;
                 align-items: center;
-                justify-content: space-between;
+                justify-content: center;
                 gap: 8px;
                 width: 100%;
                 padding: 6px 0 8px;
+            }
+            .cb_container .cb_side_container .cb_ls_sort #cb_ls_sort_select {
+                max-width: fit-content;
             }
             .cb_container .cb_side_container .cb_ls_sort label {
                 color: var(--cb_font_active);
@@ -1306,7 +1316,7 @@
                     <span class="cb_side_close_btn glyphicon glyphicon-remove" title="Übersicht schließen"></span>
                     <span class="settings_title">Projekte</span>
                     <div class="cb_ls_sort">
-                        <label for="cb_ls_sort_select">Sortieren nach</label>
+                        <label for="cb_ls_sort_select">Sortieren:</label>
                         <select id="cb_ls_sort_select" title="Projekte hiernach sortieren – dieser Wert wird im Label vor dem Projektlink angezeigt">
                             <option value="project_id">Projekt-ID</option>
                             <option value="client_id">Kunden-ID</option>
@@ -2330,9 +2340,9 @@
         if (!modalEl || !targets.length) return;
 
         formixSandboxCheckRunning = true;
-        showNotification(`Sandbox-Check läuft (${targets.length} Formix)…`, 'info');
         let checkedCount = 0;
         try {
+            showNotification(`Sandbox-Check läuft (${targets.length} Formix)…`, 'info');
             for (const href of targets) {
                 // den Edit-Link zu diesem Eintrag frisch suchen – die Tabelle kann sich zwischendurch neu geladen haben
                 const editLink = await cbWaitFor(() => document.querySelector(`table#formixTable a.btn.formixEdit[href="${href}"]`), 15000, 200);
@@ -2523,6 +2533,344 @@
     const formixObserver = new MutationObserver(() => { injectFormixButtons(); applyFormixSandboxLabels(); maybeStartFormixAutoCheck(); attachFormixModalWatcher(); }); // Buttons, gemerkte Markierungen, Auto-Check-Start und Popup-Beobachter nach jedem Neu-Rendern prüfen
     const formixTableParent = document.querySelector('table#formixTable')?.parentElement || document.body;
     formixObserver.observe(formixTableParent, { childList: true, subtree: true });
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // ─── Meilensteine: PS → Zeit-Labels & Vergleich mit der Arbeitszeit ──────
+    // Rechnet die PS-Angaben (1 PS = 60 Min.) in der Meilensteine-Übersicht in
+    // "Std./Min." um und vergleicht sie pro Segment mit der "Aktuelle Arbeitszeit"-
+    // Übersicht. Die Markierung landet als Label direkt hinter der PS-Angabe,
+    // der Tooltip zeigt die Plus-/Minuszeit. Hinter der Gesamtearbeitszeit steht
+    // zusätzlich die gesamte Projektzeit samt Differenz.
+    (function setupPsLabels() {
+        const norm = (t) => String(t || '').replace(/\s+/g, ' ').trim();
+
+        const normUser = (t) => norm(t).toLowerCase().replace(/,/g, ' ').split(/\s+/).filter(Boolean).sort().join(' '); // "Burmeister, Nico" und " Nico Burmeister" → derselbe Schlüssel (Komma und Reihenfolge egal, auch bei mehrteiligen Namen)
+
+        const SPECIAL_PS_DEFAULTS = { // Vorgaben: bekannte Special-Tasks mit fester Standard-PS (per Klick weiterhin anpassbar); Schlüssel = "Gruppe Name" in Kleinschreibung
+            'yourrate: implementierung': 1,
+            'umsetzung: jobmanager einbinden': 0.5,
+        };
+
+        const findPanelByTitle = (title) => Array.from(document.querySelectorAll('.panel'))
+            .find(panel => norm(panel.querySelector('.panel-title')?.textContent) === title) || null;
+
+        const parseGermanTime = (text) => { // "4 Std. 40 Min." / "0 Min." / "1 Std." → Minuten (null, wenn keine Zeitangabe enthalten)
+            const h = /(\d+)\s*Std\./.exec(text);
+            const m = /(\d+)\s*Min\./.exec(text);
+            if (!h && !m) return null;
+            return (h ? +h[1] : 0) * 60 + (m ? +m[1] : 0);
+        };
+
+        const parsePs = (text) => { // "1.00 PS" / "1,5 PS" → Minuten (null, wenn kein PS-Wert enthalten)
+            const match = /(\d+(?:[.,]\d+)?)\s*PS\b/.exec(text);
+            return match ? Math.round(parseFloat(match[1].replace(',', '.')) * 60) : null;
+        };
+
+        const fmtTime = (minutes) => { // Minuten → "2 Std. 0 Min." bzw. "40 Min." (gleicher Stil wie die Seite)
+            const h = Math.floor(minutes / 60), m = minutes % 60;
+            return h > 0 ? `${h} Std. ${m} Min.` : `${m} Min.`;
+        };
+
+        const fmtDiff = (diff) => { // Differenz in Minuten → "+1 Std." / "-3 Std. 40 Min." / "±0 Min."
+            if (diff === 0) return '±0 Min.';
+            const abs = Math.abs(diff), h = Math.floor(abs / 60), m = abs % 60;
+            const parts = [];
+            if (h > 0) parts.push(`${h} Std.`);
+            if (m > 0 || h === 0) parts.push(`${m} Min.`);
+            return (diff > 0 ? '+' : '-') + parts.join(' ');
+        };
+
+        const psLabelClass = (psMin, workMin, isOffen) => { // Farbregeln für das Label
+            if (isOffen || workMin === 0) return 'label-default'; // Status "Offen" oder noch gar nicht dran gearbeitet
+            const over = workMin - psMin; // so viel länger wurde gearbeitet, als Zeit da war
+            if (over > 120) return 'label-danger';   // mehr als 2 Std. drüber
+            if (over > 0) return 'label-warning';    // drüber (bis 2 Std.)
+            if (over === 0) return 'label-primary';  // exakt im Rahmen
+            return 'label-success';                  // weniger gebraucht als vorgesehen
+        };
+
+        const upsertLabel = (host, cls, text, title, opts = {}) => { // Label einsetzen/aktualisieren – idempotent (Observer-sicher)
+            const isTotal = !!opts.isTotal;
+            const span = host.querySelector(isTotal ? '.cb_ps_total_label' : '.cb_ps_label:not(.cb_ps_total_label)');
+            const className = `label ${cls} cb_ps_label${isTotal ? ' cb_ps_total_label' : ''}${opts.extraClass ? ` ${opts.extraClass}` : ''}`;
+            const dataKey = opts.dataKey || '';
+            if (span && span.className === className && span.getAttribute('data-cb-text') === text && span.getAttribute('title') === title
+                && (span.getAttribute('data-cb-special-key') || '') === dataKey) return; // unverändert → nichts anfassen
+            let el = span;
+            if (!el) {
+                host.appendChild(document.createTextNode(' '));
+                el = document.createElement('span');
+                host.appendChild(el);
+            }
+            el.className = className;
+            el.setAttribute('data-cb-text', text); // Vergleichsbasis (textContent enthält ggf. noch das Stift-Symbol)
+            el.textContent = text;
+            el.setAttribute('title', title);
+            if (dataKey) {
+                el.setAttribute('data-cb-special-key', dataKey);
+                el.style.cursor = 'pointer';
+                const icon = document.createElement('span'); // Stift-Symbol: zeigt an, dass das Label klickbar ist
+                icon.className = 'glyphicon glyphicon-pencil';
+                Object.assign(icon.style, { fontSize: '9px', top: '1px', marginLeft: '4px' });
+                el.appendChild(icon);
+            } else {
+                el.removeAttribute('data-cb-special-key');
+                el.style.cursor = '';
+            }
+        };
+
+        const cellPs = (cell) => { // PS-Wert einer Zelle lesen – eigene Einfügungen werden vorher entfernt
+            if (!cell) return null;
+            const clone = cell.cloneNode(true);
+            clone.querySelectorAll('.cb_ps_label, .cb_special_ps_value').forEach(el => el.remove());
+            return parsePs(clone.textContent);
+        };
+
+        // ── Special-Tasks: PS werden per Klick festgelegt und mit den Projekt-Infos
+        //    im lokalen Speicher abgelegt (Schlüssel: Gruppe Name + Benutzer + Assistent) ──
+        const getStoredProject = () => { try { return JSON.parse(localStorage.getItem(project_id) || '{}'); } catch (e) { return {}; } };
+        const getSpecialPsMap = () => getStoredProject().special_ps || {};
+        const saveSpecialPs = (key, ps) => { // ps = Zahl in PS oder null zum Entfernen
+            const stored = getStoredProject();
+            const map = stored.special_ps || {};
+            if (ps === null) delete map[key];
+            else map[key] = ps;
+            stored.special_ps = map;
+            localStorage.setItem(project_id, JSON.stringify(stored));
+        };
+
+        const upsertSpecialValue = (host, psFloat, key) => { // gespeicherte PS als "2.00 PS" in die Betrag-Zelle schreiben (klickbar zum Ändern)
+            let el = host.querySelector('.cb_special_ps_value');
+            const text = `${psFloat.toFixed(2)} PS`;
+            if (el && el.textContent === text && el.getAttribute('data-cb-special-key') === key) return;
+            if (!el) {
+                el = document.createElement('span');
+                el.className = 'cb_special_ps_value';
+                el.style.cursor = 'pointer';
+                el.title = 'Klicken, um die Special-PS zu ändern';
+                host.prepend(el);
+            }
+            el.textContent = text;
+            el.setAttribute('data-cb-special-key', key);
+        };
+        const removeSpecialValue = (host) => host.querySelector('.cb_special_ps_value')?.remove();
+
+        const collectWorkTimes = () => { // "Aktuelle Arbeitszeit" auslesen: Benutzer+Segment → Minuten (getrennt je Benutzer) sowie Segment → Minuten (Summe, als Fallback) + Gesamt
+            const body = findPanelByTitle('Aktuelle Arbeitszeit')?.querySelector('.panel-body');
+            if (!body) return null;
+            const perSegment = new Map();
+            const perUserSegment = new Map();
+            let currentUser = ''; // die <strong><u>…</u></strong>-Zeile leitet jeweils den Block eines Benutzers ein
+            body.querySelectorAll('strong').forEach(strong => {
+                if (strong.closest('mark')) return; // Gesamtzeile überspringen
+                const userEl = strong.querySelector('u');
+                if (userEl) { currentUser = normUser(userEl.textContent); return; } // ab hier gehören die Zeilen diesem Benutzer
+                let node = strong.nextSibling, text = ''; // Text bis zum nächsten <br> einsammeln – dort steht " | 4 Std. 40 Min. ~ 100%"
+                while (node && node.nodeName !== 'BR' && node.nodeName !== 'STRONG' && node.nodeName !== 'P') {
+                    text += node.textContent || '';
+                    node = node.nextSibling;
+                }
+                const minutes = parseGermanTime(text);
+                if (minutes === null) return;
+                const name = norm(strong.textContent);
+                perSegment.set(name, (perSegment.get(name) || 0) + minutes); // Summe über alle Benutzer (Fallback, falls in der Zeile kein Benutzer erkennbar ist)
+                if (currentUser) {
+                    const key = `${currentUser}||${name}`;
+                    perUserSegment.set(key, (perUserSegment.get(key) || 0) + minutes);
+                }
+            });
+            const totalStrong = Array.from(body.querySelectorAll('mark strong')).find(s => norm(s.textContent).includes('Gesamtearbeitszeit'));
+            const totalP = totalStrong ? totalStrong.closest('p') : null;
+            let total = null;
+            if (totalP) {
+                const clone = totalP.cloneNode(true); // unser eigenes Label vor dem Parsen entfernen, sonst lesen wir unsere Zahlen mit
+                clone.querySelectorAll('.cb_ps_label').forEach(el => el.remove());
+                total = parseGermanTime(clone.textContent);
+            }
+            return { perSegment, perUserSegment, total, totalP };
+        };
+
+        const applyPsLabels = () => {
+            const table = findPanelByTitle('Meilensteine')?.querySelector('table');
+            if (!table) return;
+            const work = collectWorkTimes();
+            if (!work) return; // Arbeitszeit-Übersicht (noch) nicht geladen → beim nächsten Rendern erneut versuchen
+
+            const headers = Array.from(table.querySelectorAll('thead th')).map(th => norm(th.textContent).toLowerCase());
+            const idxName = headers.findIndex(h => h.includes('gruppe'));
+            const idxStatus = headers.indexOf('status');
+            const idxUser = headers.indexOf('benutzer');
+            const psIdxs = [headers.indexOf('%'), headers.findIndex(h => h.includes('betrag'))].filter(i => i >= 0); // PS steht mal unter "%", mal unter "Betrag"
+            const idxAssist = headers.findIndex(h => h.includes('assistent'));
+            const idxBetrag = headers.findIndex(h => h.includes('betrag'));
+            const idxPercent = headers.indexOf('%');
+            if (idxName < 0 || !psIdxs.length) return;
+
+            // Wohin gehören generierte Labels/PS-Werte? Stehen die vorhandenen PS der Tabelle
+            // im %-Feld, folgen die generierten dorthin – ansonsten standardmäßig ins Betrag-Feld.
+            let genHostIdx = idxBetrag >= 0 ? idxBetrag : idxPercent;
+            if (idxPercent >= 0) {
+                for (const row of table.querySelectorAll('tbody > tr')) {
+                    if (cellPs(row.cells[idxPercent]) !== null) { genHostIdx = idxPercent; break; }
+                }
+            }
+
+            const specialMap = getSpecialPsMap();
+            let totalPsMin = 0;         // gesamte Projektzeit (inkl. gesetzter Special-PS) – für die Anzeige
+            let specialPsMin = 0;       // Special-Anteil daran (darf kein Plus erzeugen)
+            let specialExcludedMin = 0; // Arbeitszeit auf Special-Tasks, die neutral bleibt (bis zur PS-Grenze bzw. komplett)
+            let anyRow = false;
+            table.querySelectorAll('tbody > tr').forEach(row => {
+                const cells = row.cells;
+                if (!cells || !cells.length) return;
+                const name = norm(cells[idxName]?.textContent);
+                if (!name) return;
+
+                // Benutzer der Zeile ermitteln (können auch mehrere sein) – so bleiben gleiche Tasks verschiedener Benutzer sauber getrennt
+                let userKeys = idxUser >= 0
+                    ? Array.from(cells[idxUser]?.querySelectorAll('a.userInfo') || []).map(a => normUser(a.textContent)).filter(Boolean)
+                    : [];
+                if (!userKeys.length && idxUser >= 0) {
+                    const cellUser = normUser(cells[idxUser]?.textContent);
+                    if (cellUser) userKeys = [cellUser];
+                }
+                const workMin = userKeys.length
+                    ? userKeys.reduce((sum, user) => sum + (work.perUserSegment.get(`${user}||${name}`) ?? 0), 0) // nur die Zeit DIESER Benutzer an DIESEM Segment
+                    : (work.perSegment.get(name) ?? 0); // kein Benutzer erkennbar → wie bisher Summe über alle
+                const isOffen = norm(cells[idxStatus]?.textContent).toLowerCase() === 'offen';
+                const isSpecial = idxAssist >= 0 && norm(cells[idxAssist]?.textContent).toLowerCase() === 'special';
+
+                let psCell = null, psMin = null;
+                for (const i of psIdxs) { // erste Zelle mit PS-Wert gewinnt
+                    const value = cellPs(cells[i]);
+                    if (value !== null) { psCell = cells[i]; psMin = value; break; }
+                }
+                anyRow = true;
+
+                if (!isSpecial) {
+                    const effPs = psMin ?? 0; // keine PS angegeben = keine Zeit dafür vorgesehen (0 Std. 0 Min.)
+                    const host = psCell || cells[genHostIdx] || cells[psIdxs[0]]; // ohne PS-Angabe folgt das Label der Spalten-Konvention der Tabelle
+                    if (!host) return;
+                    totalPsMin += effPs;
+                    upsertLabel(host, psLabelClass(effPs, workMin, isOffen), fmtTime(effPs), fmtDiff(effPs - workMin));
+                    return;
+                }
+
+                // ── Special-Task: immer neutral (kein Plus); nur das Überziehen gesetzter PS zählt als Minus ──
+                const key = `${name.toLowerCase()}||${userKeys.join('+')}||special`; // kanonischer Schlüssel: Gruppe Name + Benutzer + Assistent
+                const storedFloat = typeof specialMap[key] === 'number' ? specialMap[key] : null;
+                const defaultFloat = SPECIAL_PS_DEFAULTS[name.toLowerCase()] ?? null; // Vorgabe für bekannte Special-Tasks
+                const effFloat = storedFloat ?? defaultFloat; // eigene Angabe schlägt die Vorgabe
+                const ps = psMin ?? (effFloat !== null ? Math.round(effFloat * 60) : null); // PS von der Seite haben Vorrang
+                const host = psCell || cells[genHostIdx] || cells[psIdxs[0]];
+                if (!host) return;
+
+                const editing = !!host.querySelector('.cb_special_ps_input'); // Eingabefeld gerade offen? → weiter mitrechnen, aber die Anzeige in Ruhe lassen
+
+                if (ps === null) { // keine PS festgelegt → komplett neutral; per Klick lassen sich PS setzen
+                    specialExcludedMin += workMin;
+                    if (!editing) {
+                        removeSpecialValue(host);
+                        upsertLabel(host, 'label-default', 'Special', 'Special-Task – zählt nicht als Plus/Minus. Klicken, um PS festzulegen.', { extraClass: 'cb_ps_special', dataKey: key });
+                    }
+                    return;
+                }
+
+                totalPsMin += ps;
+                specialPsMin += ps;
+                specialExcludedMin += Math.min(workMin, ps); // Zeit bis zur PS-Grenze bleibt neutral, nur das Überziehen zählt
+                if (editing) return; // Anzeige erst nach dem Schließen des Eingabefelds aktualisieren
+                if (psMin === null) upsertSpecialValue(host, effFloat, key); // PS-Wert (eigene Angabe bzw. Vorgabe) in der Zelle anzeigen
+                else removeSpecialValue(host);
+                const effWork = workMin === 0 ? 0 : Math.max(workMin, ps); // unterhalb der Grenze wie "exakt im Rahmen" behandeln (kein Plus)
+                const tooltip = `${fmtDiff(Math.min(0, ps - workMin))} | Special: kein Plus möglich${psMin === null ? ' – Klick zum Ändern der PS' : ''}`;
+                upsertLabel(host, psLabelClass(ps, effWork, isOffen), fmtTime(ps), tooltip, { extraClass: 'cb_ps_special', dataKey: psMin === null ? key : '' });
+            });
+
+            if (anyRow && work.totalP && work.total !== null) { // hinter der Gesamtearbeitszeit: gesamte Projektzeit + Differenz (Special-Anteile neutralisiert)
+                const countedWork = Math.max(0, work.total - specialExcludedMin);
+                const countedPs = totalPsMin - specialPsMin;
+                const diff = countedPs - countedWork;
+                upsertLabel(work.totalP, psLabelClass(countedPs, countedWork, false), `${fmtTime(totalPsMin)} (${fmtDiff(diff)})`, fmtDiff(diff), { isTotal: true });
+            }
+        };
+
+        const startSpecialPsEdit = (target) => { // Special-Markierung in ein Inline-Eingabefeld verwandeln
+            const key = target.getAttribute('data-cb-special-key');
+            const host = target.closest('td') || target.parentElement;
+            if (!key || !host || host.querySelector('.cb_special_ps_input')) return;
+            const defaultPs = SPECIAL_PS_DEFAULTS[String(key).split('||')[0]] ?? null; // Vorgabe dieser Task (falls vorhanden)
+            const current = getSpecialPsMap()[key] ?? defaultPs;
+
+            host.querySelectorAll('.cb_ps_label, .cb_special_ps_value').forEach(el => { el.style.display = 'none'; }); // Anzeige ausblenden, solange getippt wird
+
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.className = 'cb_special_ps_input';
+            input.placeholder = 'PS (z.B. 1.5)';
+            input.value = current != null ? String(current) : '';
+            input.title = 'PS für diese Special-Task – Enter: speichern, Esc: abbrechen, leer: entfernen';
+            Object.assign(input.style, { width: '85px', padding: '1px 5px', fontSize: '12px', border: '1px solid #ccc', borderRadius: '3px' });
+
+            const close = () => {
+                if (input.dataset.done) return;
+                input.dataset.done = '1';
+                input.remove();
+                host.querySelectorAll('.cb_ps_label, .cb_special_ps_value').forEach(el => { el.style.display = ''; });
+                applyPsLabels(); // Anzeige mit dem aktuellen Stand neu aufbauen
+            };
+            const commitValue = () => { // true = übernommen/entfernt, false = Eingabe ungültig
+                const trimmed = input.value.trim().replace(',', '.');
+                if (trimmed === '' || parseFloat(trimmed) === 0) {
+                    saveSpecialPs(key, null);
+                    showNotification(defaultPs !== null ? `Special-PS auf Vorgabe zurückgesetzt (${defaultPs} PS)` : 'Special-PS entfernt');
+                    return true;
+                }
+                const value = parseFloat(trimmed);
+                if (!isFinite(value) || value < 0) {
+                    showNotification('Ungültige PS-Angabe', 'danger');
+                    return false;
+                }
+                saveSpecialPs(key, value);
+                showNotification(`Special-PS gespeichert: ${value} PS`);
+                return true;
+            };
+
+            input.addEventListener('keydown', (ev) => {
+                ev.stopPropagation();
+                if (ev.key === 'Enter') {
+                    ev.preventDefault();
+                    if (commitValue()) close();
+                    else input.select(); // ungültig → Eingabe zum Korrigieren behalten
+                } else if (ev.key === 'Escape') {
+                    ev.preventDefault();
+                    close(); // abbrechen ohne zu speichern
+                }
+            });
+            input.addEventListener('blur', () => {
+                if (input.dataset.done) return;
+                commitValue(); // beim Verlassen übernehmen (ungültige Eingabe wird verworfen)
+                close();
+            });
+            input.addEventListener('click', (ev) => ev.stopPropagation());
+
+            host.appendChild(input);
+            input.focus();
+            input.select();
+        };
+
+        document.addEventListener('click', (e) => { // Linksklick auf eine Special-Markierung: Inline-Eingabefeld für die PS öffnen
+            const target = e.target && e.target.closest ? e.target.closest('[data-cb-special-key]') : null;
+            if (!target) return;
+            e.preventDefault();
+            e.stopPropagation();
+            startSpecialPsEdit(target);
+        });
+
+        applyPsLabels();
+        const psObserver = new MutationObserver(() => applyPsLabels()); // beide Panels laden verzögert und werden von der Seite neu gerendert (Status ändern, Zeit buchen, sortieren …)
+        psObserver.observe(document.body, { childList: true, subtree: true });
+    })();
     // ─────────────────────────────────────────────────────────────────────────
 
     // ─── Orga-Button & Modal ──────────────────────────────────────────────────
@@ -3207,10 +3555,17 @@
         }
 
         // ── Neue Orga-Notiz erstellen ──────────────────────────────────────
+        function getProjectTypeFromPage() { // Projekttyp direkt aus dem Info-Panel lesen – funktioniert auch, bevor die Copy-Buttons-Daten erzeugt wurden (Domains-Panel noch zu)
+            const typElement = Array.from(document.querySelectorAll('#collapseOne .panel-body p b'))
+                .find(el => ['typ', 'typ:'].includes((el.textContent || '').toLowerCase().trim()));
+            if (!typElement) return '';
+            return (typElement.parentElement.textContent || '').replace(/^\s*Typ\s*:?\s*/i, '').trim();
+        }
+
         function openOrgaModal(newNoteBtn) {
             const storedData = JSON.parse(localStorage.getItem(project_id) || '{}');
-            const projectType = (storedData.project_type || '').trim();
-            const rows = projectType === 'Medienberater Zweittermin' ? ZT_ROWS : DEFAULT_ROWS;
+            const projectType = getProjectTypeFromPage() || (storedData.project_type || '').trim(); // zuerst live von der Seite, sonst aus den lokalen Daten
+            const rows = projectType.toLowerCase() === 'medienberater zweittermin' ? ZT_ROWS : DEFAULT_ROWS;
 
             buildOrgaModal({
                 title: 'Projektnotiz: Organisation',

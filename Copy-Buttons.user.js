@@ -39,7 +39,7 @@
             canceled: '❌',
             delayed: '🕒',
         },
-  orga_line_mode: 'br', // Zeilentrennung in der Orga-Notiz: 'br' (Standard) oder 'p' (jede Zeile ein Absatz) – einstellbar über das Zahnrad im Orga-Modal //
+  orga_line_mode: 'br', // Zeilenabstand in der Orga-Notiz: 'br' (Standard) oder 'br2' (zwei <br>) – einstellbar über das Zahnrad im Orga-Modal //
     };
 
     const saveSettings = (newSettings) => { // Settings speichern – auch außerhalb des Settings-Popups nutzbar //
@@ -3032,7 +3032,7 @@
 
         const getOrgaIcons = () => ({ ...ORGA_ICON_DEFAULTS, ...(settings.orga_icons || {}) }); // fehlende Keys → Standard-Icon
 
-        const getOrgaLineMode = () => (settings.orga_line_mode === 'p' ? 'p' : 'br'); // 'br' = Umbruch per <br>, 'p' = jede Zeile ein Absatz
+        const getOrgaLineMode = () => (settings.orga_line_mode === 'br2' ? 'br2' : 'br'); // 'br' = ein <br> (Standard), 'br2' = zwei <br> (größerer Abstand)
 
         const orgaStatusText = (key) => { // "✅ done" bzw. nur "done", wenn kein Icon hinterlegt ist
             const icon = String(getOrgaIcons()[key] ?? '').trim();
@@ -3980,10 +3980,10 @@
                 <button type="button" class="btn btn-default btn-xs" id="orga-icon-reset">Standard-Icons</button>
                 <div class="orga-icon-settings-title orga-settings-sub">Zeilenabstände der Notiz</div>
                 <div class="orga-icon-row">
-                  <label for="orga-line-mode">Zeilenumbruch</label>
+                  <label for="orga-line-mode">Zeilenabstand</label>
                   <select class="orga-line-mode-select" id="orga-line-mode">
                     <option value="br">&lt;br&gt; (Standard)</option>
-                    <option value="p">&lt;p&gt; pro Zeile</option>
+                    <option value="br2">&lt;br&gt;&lt;br&gt; (doppelter Abstand)</option>
                   </select>
                 </div>
                 <div class="orga-icon-hint">Legt fest, wie die Zeilen beim Speichern in die Notiz geschrieben werden.</div>
@@ -4006,7 +4006,7 @@
             const lineModeSelect = panel.querySelector('#orga-line-mode'); // Art der Zeilentrennung
             lineModeSelect.value = getOrgaLineMode();
             lineModeSelect.addEventListener('change', () => { // sofort speichern
-              saveSettings({ orga_line_mode: lineModeSelect.value === 'p' ? 'p' : 'br' });
+              saveSettings({ orga_line_mode: lineModeSelect.value === 'br2' ? 'br2' : 'br' });
             });
 
             panel.querySelector('#orga-icon-reset').addEventListener('click', () => { // zurück zu den Standard-Icons
@@ -4108,8 +4108,8 @@
                     doc.body.focus();
                     doc.execCommand('selectAll', false, null);
                     const htmlLines = Array.isArray(lines) ? lines : String(lines).split('\n'); // Array (Orga- + Textzeilen) oder alter String
-                    const html = getOrgaLineMode() === 'p'
-                      ? htmlLines.map(l => `<p>${l}</p>`).join('') // jede Zeile ein eigenes <p>-Element (Abstand über die Absätze)
+                    const html = getOrgaLineMode() === 'br2'
+                      ? htmlLines.map(l => `${l}<br><br>`).join('') // zwei <br> je Zeile (größerer Abstand)
                       : htmlLines.map(l => `${l}<br>`).join(''); // Standard: Zeilen per <br> trennen
                     if (!doc.execCommand('insertHTML', false, html)) {
                         doc.body.innerHTML = html;

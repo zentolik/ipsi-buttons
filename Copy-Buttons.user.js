@@ -1,11 +1,11 @@
 // ==UserScript==
 // @name         Copy-Buttons
 // @namespace    https://github.com/zentolik
-// @version      0.99
+// @version      1.00
 // @description  doing stuff ʕ·͡ᴥ·ʔ
 // @author       Zentolik
 // @match        https://ipsi.securewebsystems.net/project/detailed/*
-// @icon         https://www.google.com/s2/favicons?sz=64&domain=securewebsystems.net
+// @icon         https://www.google.com/s2/favicons?sz=64&domain=euroweb.de
 // @updateURL    https://github.com/zentolik/ipsi-buttons/raw/main/Copy-Buttons.user.js
 // @downloadURL  https://github.com/zentolik/ipsi-buttons/raw/main/Copy-Buttons.user.js
 // @grant        none
@@ -13,7 +13,7 @@
 
 !(function() { // ʕ·͡ᴥ·ʔ hi & ty <3
     'use strict';
-    const SCRIPT_VERSION = '0.99';
+    const SCRIPT_VERSION = '1.00';
     console.log(`ʕ·͡ᴥ·ʔ *bup* v${SCRIPT_VERSION}`);
     let settings = {
         button_position: true, // ändert die position vom btn (wenn auf "false", empfähle ich "copy_icon" zu aktivieren") //
@@ -83,7 +83,7 @@
                 createSettings();
                 createCopyButton(false, false, false, 'copyPath');
                 createCopyButton(false, false, false, 'copyClientdata');
-                createCopyButton(false, false, false, 'copyPhonedata');
+                injectMilestoneIcons();
                 return true;
             }
         }
@@ -145,7 +145,7 @@
                 loopListener = false;
                 createCopyButton(edo, client_id, client_domain, 'copyPath');
                 createCopyButton(edo, client_id, client_domain, 'copyClientdata');
-                createCopyButton(edo, client_id, client_domain, 'copyPhonedata');
+                injectMilestoneIcons();
                 clearInterval(intervalId);
             }
         }
@@ -180,10 +180,6 @@
                 if (copyClientdata) {
                     copyClientdata.remove();
                 }
-                const copyPhonedata = document.querySelector('#copyPhonedata');
-                if (copyPhonedata) {
-                    copyPhonedata.remove();
-                }
                 removeButton.remove();
             });
             document.querySelector('.copyBtnContainer').appendChild(removeButton);
@@ -196,6 +192,123 @@
         button.className = className;
         button.innerHTML = content;
         return button;
+    };
+
+
+    // ── Meilensteine-Ticket-Icons ───────────────────────────────────
+    // Fügt vor bestimmten Meilenstein-Texten ein Icon ein, das ein
+    // internes Zammad-Ticket erstellt (Domaintransfer / YourRate / Dritttermin-VL).
+    const MILESTONE_TICKETS = [
+        { match: 'Administratives: Domaintransfer',                                  action: 'domaintransfer' },
+        { match: 'YourRate: Implementierung',                                        action: 'yourrate' },
+        { match: 'Kundenkommunikation: Organisation / VL-Abnahme vom MB',            action: 'dritttermin_vl' },
+    ];
+
+    const openZammadTicket = (action, mbName) => {
+        const data = JSON.parse(localStorage.getItem(project_id) || "{}");
+        const userEmail = (settings.user_email || "") + "@" + "wwwe" + ".de";
+        const _domRows2 = (function(){
+            var res = { live: '', demo: '' };
+            var t = document.querySelector('table.domains-table');
+            if (!t) return res;
+            var trs = Array.prototype.slice.call(t.querySelectorAll('tr'));
+            trs.forEach(function(tr){
+                var anchors = Array.prototype.slice.call(tr.querySelectorAll('a'));
+                anchors.forEach(function(a){
+                    var txt = (a.textContent || '').trim();
+                    var href = a.getAttribute('href') || '';
+                    if (/securewebdemo/i.test(txt) || /securewebdemo/i.test(href)) {
+                        if (!res.demo) res.demo = txt;
+                    } else if (/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(txt) && a.classList.contains('text-primary')) {
+                        if (!res.live) res.live = txt;
+                    }
+                });
+            });
+            return res;
+        })();
+        const demoLink = _domRows2.demo || '';
+        const liveDomain = _domRows2.live || '';
+        const payload = {
+            ...data,
+            department: settings.department || "",
+            user_email: userEmail,
+            demo_link: demoLink,
+            live_domain: liveDomain,
+            action_type: action,
+        };
+        if (mbName) payload.web_hunter = mbName;
+        const base = "https://tickets.wwwe.systems";
+        const url = base + "/#ticket/create/id/87679" + "#" + "cb" + "=" + encodeURIComponent(JSON.stringify(payload));
+        return window.open(url, "_blank");
+    };
+
+    // Liest aus der DOKU (WT-Termin) den aktuellsten Web-Hunter aus.
+    // DOKU ist eine Vue-SPA auf fremder Origin → wir öffnen einen echten
+    // Tab, warten bis die Tabelle da ist, lesen den Namen und schließen ihn.
+    const fetchWtHunterThen = (client_id, cb) => {
+        // Cross-origin: DOKU-Tab als EINZIGES Popup oeffnen. Die DOKU-Bruecke
+        // liest den WT-Web-Hunter (Ersterstellung WT persoenlich) und oeffnet
+        // danach Zammad selbst (mit web_hunter im Payload).
+        const dokuBase = "https://doku.securewebsystems.net";
+        const lb = decodeURIComponent("%5B"), rb = decodeURIComponent("%5D");
+        const q = String.fromCharCode(63), amp = String.fromCharCode(38), eq = String.fromCharCode(61);
+        const zammadInfo = (function(){
+            try {
+                const data = JSON.parse(localStorage.getItem(project_id) || "{}");
+                const userEmail = (settings.user_email || "") + "@" + "wwwe" + ".de";
+                const payload = Object.assign({}, data, {
+                    department: settings.department || "",
+                    user_email: userEmail,
+                    action_type: "domaintransfer"
+                });
+                return amp + "cb" + eq + encodeURIComponent(JSON.stringify(payload));
+            } catch (e) { return ""; }
+        })();
+        const dokuUrl = dokuBase + "/archive" + q + "filter" + lb + "contract" + rb + eq + encodeURIComponent(client_id)
+            + zammadInfo + "#wwwe_dt";
+        const win = window.open(dokuUrl, "wwwe_dt_bridge");
+        if (typeof cb === "function") cb(win ? true : null);
+    };
+    const makeMilestoneIcon = (action) => {
+        const icon = document.createElement('a');
+        icon.href = '#';
+        icon.className = 'glyphicon glyphicon-envelope cb_ms_ticket_icon';
+        icon.title = 'Zammad-Ticket erstellen';
+        icon.style.cursor = 'pointer';
+        icon.style.marginRight = '6px';
+        icon.style.textDecoration = 'none';
+        icon.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const data = JSON.parse(localStorage.getItem(project_id) || "{}");
+            if (action === "domaintransfer") {
+                // Nur EIN Popup pro Klick: die DOKU-Bruecke oeffnen.
+                // Die DOKU-URL traegt bereits den Zammad-cb-Payload + #wwwe_dt.
+                // Die DOKU-Bruecke liest den WT-Web-Hunter und oeffnet dann Zammad selbst.
+                fetchWtHunterThen(data.client_id, function(){});
+            } else {
+                openZammadTicket(action);
+            }
+        });
+        return icon;
+    };
+
+    const injectMilestoneIcons = () => {
+        // (Migration Zammad: otrs_extension_active-Guard entfernt – laeuft direkt auf IPSI)
+        const heading = Array.from(document.querySelectorAll('h4.panel-title')).find(el => el.textContent.trim().toLowerCase() === 'meilensteine');
+        if (!heading) return;
+        const panel = heading.closest('.panel');
+        if (!panel) return;
+        const rows = Array.from(panel.querySelectorAll('table tr'));
+        rows.forEach(row => {
+            const nameTd = row.querySelector('td:nth-child(3)');
+            if (!nameTd) return;
+            if (nameTd.querySelector('.cb_ms_ticket_icon')) return; // schon eingefügt
+            const text = nameTd.textContent.trim();
+            const hit = MILESTONE_TICKETS.find(m => text.includes(m.match));
+            if (!hit) return;
+            nameTd.insertBefore(makeMilestoneIcon(hit.action), nameTd.firstChild);
+        });
     };
 
     const createCopyButton = (edo, client_id, client_domain, type) => {
@@ -213,7 +326,7 @@
         customColor = settings.button_color.startsWith("#");
         color_class = customColor ? null : colorMap[buttonColor] || color_class;
         const data = JSON.parse(localStorage.getItem(project_id));
-        if ((!edo && !client_id && !client_domain || type === 'copyClientdata' || type === 'copyPhonedata') && data) {
+        if ((!edo && !client_id && !client_domain || type === 'copyClientdata') && data) {
             client_domain = data.client_domain;
             client_id = data.client_id;
             edo = data.edo;
@@ -229,7 +342,7 @@
             }
         }
         if (type === 'copyClientdata') {
-            if (!document.querySelector('#copyClientdata') && document.body.classList.contains('otrs_extension_active')) {
+            if (!document.querySelector('#copyClientdata')) {
                 copy = data.client_email;
                 const button = createButton('copyClientdata', settings.copy_icon ? `btn ${color_class} glyphicon glyphicon-send` : `btn ${color_class}`, settings.copy_icon ? '' : data.client_email);
                 button.title = copy;
@@ -240,31 +353,39 @@
                 // Userdaten gewählt ist. Der Projekttyp selbst steckt in data.project_type.
                 const projectTypeLc = String(data.project_type || '').toLowerCase();
                 const isAktuProject = projectTypeLc.includes('aktu') || projectTypeLc.includes('korrektur');
-                const extendedData = {
+                const isKorrekturProject = projectTypeLc.includes('korrektur');
+                const baseExtended = {
                     ...data,
-                    department: isAktuProject ? 'Team Aktualisierung Berlin' : (settings.department || '')
+                    department: isAktuProject ? 'Team Aktualisierung Berlin' : (settings.department || ''),
+                    action_type: 'external',
+                    is_aktu: isAktuProject,
+                    is_korrektur: isKorrekturProject,
+                    user_email: (settings.user_email || '') + '@' + 'wwwe' + '.de'
                 };
-                button.addEventListener('click', () =>
-                    window.open(`https://otrs.euroweb.net/index.pl?Action=AgentTicketEmail#${JSON.stringify(extendedData)}`, '_blank')
-                );
-            }
-        }
-        if (type === 'copyPhonedata') {
-            if (!document.querySelector('#copyPhonedata') && document.body.classList.contains('otrs_extension_active') && data.project_type && data.project_type.trim() === 'Medienberater Zweittermin') {
-                const userEmail = (settings.user_email || '') + '@ew.de';
-                copy = userEmail;
-                const button = createButton('copyPhonedata', settings.copy_icon ? `btn ${color_class} glyphicon glyphicon-share` : `btn ${color_class}`, settings.copy_icon ? '' : 'MB Zweittermin');
-                button.title = 'OTRS Domaintransfer Ticket';
-                setBtnProperties(button);
-                const extendedData = {
-                    ...data,
-                    department: settings.department || '',
-                    user_email: userEmail,
-                    action_type: 'phone'
-                };
-                button.addEventListener('click', () =>
-                    window.open(`https://otrs.euroweb.net/index.pl?Action=AgentTicketPhone#${JSON.stringify(extendedData)}`, '_blank')
-                );
+                button.addEventListener('click', function () {
+                    // Domains ZUM KLICKZEITPUNKT aus der (ggf. spaeter gerenderten) Tabelle lesen.
+                    var _domRows = (function(){
+                        var res = { live: '', demo: '' };
+                        var t = document.querySelector('table.domains-table');
+                        if (!t) return res;
+                        var trs = Array.prototype.slice.call(t.querySelectorAll('tr'));
+                        trs.forEach(function(tr){
+                            var anchors = Array.prototype.slice.call(tr.querySelectorAll('a'));
+                            anchors.forEach(function(a){
+                                var txt = (a.textContent || '').trim();
+                                var href = a.getAttribute('href') || '';
+                                if (/securewebdemo/i.test(txt) || /securewebdemo/i.test(href)) {
+                                    if (!res.demo) res.demo = txt;
+                                } else if (/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(txt) && a.classList.contains('text-primary')) {
+                                    if (!res.live) res.live = txt;
+                                }
+                            });
+                        });
+                        return res;
+                    })();
+                    var extendedData = Object.assign({}, baseExtended, { demo_link: _domRows.demo || '', live_domain: _domRows.live || '' });
+                    window.open('https://tickets.wwwe.systems/#ticket/create/id/87679#cb=' + encodeURIComponent(JSON.stringify(extendedData)), '_blank');
+                });
             }
         }
         function setBtnProperties(button) {
@@ -630,7 +751,7 @@
                 --cb_color_green: #15db81;
                 --cb_color_gray: #f2f5ff;
             }
-            #copyPath, #copyClientdata, #copyPhonedata, #removeButton {
+            #copyPath, #copyClientdata, #removeButton {
                 position: unset;
                 transition: width 0.35s ${bouncy_transition};
             }
@@ -1316,7 +1437,7 @@
                     <span class="cb_side_close_btn glyphicon glyphicon-remove" title="Übersicht schließen"></span>
                     <span class="settings_title">Projekte</span>
                     <div class="cb_ls_sort">
-                        <label for="cb_ls_sort_select">Sortieren:</label>
+                        <label for="cb_ls_sort_select">Sortieren nach</label>
                         <select id="cb_ls_sort_select" title="Projekte hiernach sortieren – dieser Wert wird im Label vor dem Projektlink angezeigt">
                             <option value="project_id">Projekt-ID</option>
                             <option value="client_id">Kunden-ID</option>
@@ -1797,16 +1918,12 @@
             if (copyClientdata) {
                 copyClientdata.remove();
             }
-            const copyPhonedata = document.querySelector('#copyPhonedata');
-            if (copyPhonedata) {
-                copyPhonedata.remove();
-            }
 
             const storedData = JSON.parse(localStorage.getItem(project_id));
             if (storedData) {
                 createCopyButton(false, false, false, 'copyPath');
                 createCopyButton(false, false, false, 'copyClientdata');
-                createCopyButton(false, false, false, 'copyPhonedata');
+                injectMilestoneIcons();
             }
 
             const removeButton = document.querySelector('#removeButton');
@@ -2310,65 +2427,117 @@
     };
 
     let formixModalWatched = null; // das aktuell beobachtete Modal-Element (wird neu verkabelt, falls die Seite es austauscht)
-    const attachFormixModalWatcher = () => {
-        const modalEl = document.querySelector('#formixModal');
-        if (!modalEl || modalEl === formixModalWatched) return;
-        formixModalWatched = modalEl;
+    let formixLiveState = null; // { key, checked } - laufend aktualisierter Stand des aktuell geoeffneten Formix
+        const captureFormixLiveState = () => { // aktuellen Sandbox-Stand + Formular-URL merken, solange das Formular im DOM ist
+            const form = document.querySelector('#formix-form');
+            if (!form) return;
+            const key = form.getAttribute('action');
+            if (!key) return;
+            const sandboxCb = form.querySelector('[type="checkbox"][name="sandbox"]');
+            if (!sandboxCb) return;
+            formixLiveState = { key: key, checked: sandboxCb.checked };
+        };
+        const attachFormixModalWatcher = () => {
+            const modalEl = document.querySelector('#formixModal');
+            if (!modalEl || modalEl === formixModalWatched) return;
+            formixModalWatched = modalEl;
 
-        new MutationObserver(() => { // "Form saved" erschienen? → zwischengemerkten Stand sofort übernehmen
-            if (formixPendingSave && isFormixSavedAlertVisible(modalEl)) commitFormixPendingSave();
-        }).observe(modalEl, { childList: true, subtree: true });
 
-        let wasOpen = modalEl.classList.contains('in');
-        new MutationObserver(() => {
-            const isOpen = modalEl.classList.contains('in');
-            if (wasOpen && !isOpen) { // Popup wurde gerade geschlossen
-                if (formixPendingSave && isFormixSavedAlertVisible(modalEl)) commitFormixPendingSave(); // Sicherheitsnetz, falls die Bestätigung bis hierhin noch nicht verarbeitet wurde
-                formixPendingSave = null; // ohne (erfolgreiches) Speichern geschlossen → nichts übernehmen
-            }
-            wasOpen = isOpen;
-        }).observe(modalEl, { attributes: true, attributeFilter: ['class'] });
-    };
+            new MutationObserver(() => { // Inhalt aendert sich (Formular geladen/getippt): 'Form saved' pruefen UND Live-Stand nachfuehren
+                if (formixPendingSave && isFormixSavedAlertVisible(modalEl)) commitFormixPendingSave();
+                captureFormixLiveState();
+            }).observe(modalEl, { childList: true, subtree: true });
+
+
+            // Aenderungen an der Sandbox-Checkbox direkt mitnehmen (Klick/Change im Formular).
+            modalEl.addEventListener('change', (e) => {
+                if (e.target && e.target.matches && e.target.matches('[type="checkbox"][name="sandbox"]')) captureFormixLiveState();
+            }, true);
+            modalEl.addEventListener('click', () => { captureFormixLiveState(); }, true);
+
+
+            let wasOpen = modalEl.classList.contains('in');
+            if (wasOpen) captureFormixLiveState();
+            new MutationObserver(() => {
+                const isOpen = modalEl.classList.contains('in');
+                if (!wasOpen && isOpen) { // gerade geoeffnet -> Startstand erfassen
+                    captureFormixLiveState();
+                }
+                if (wasOpen && !isOpen) { // Popup wurde gerade geschlossen (X, ausserhalb-Klick, Schliessen, Speichern ...)
+                    if (formixPendingSave && isFormixSavedAlertVisible(modalEl)) commitFormixPendingSave(); // gespeicherter Stand hat Vorrang
+                    formixPendingSave = null;
+                    // Label IMMER anhand des zuletzt gesehenen Sandbox-Stands aktualisieren - egal wie geschlossen wurde.
+                    if (formixLiveState && formixLiveState.key) recordFormixSandboxResult(formixLiveState.key, formixLiveState.checked);
+                    formixLiveState = null;
+                }
+                wasOpen = isOpen;
+            }).observe(modalEl, { attributes: true, attributeFilter: ['class'] });
+        };
 
     let formixSandboxCheckRunning = false;
-    const runFormixSandboxCheck = async () => { // prüft alle Formix nacheinander: öffnen → auslesen → Popup schließen → nächstes (es wird nichts gespeichert)
+    const runFormixSandboxCheck = async () => { // prueft alle Formix parallel per fetch (kein Modal-Oeffnen/-Schliessen noetig) -> deutlich schneller
         if (formixSandboxCheckRunning) return;
-        const modalEl = document.querySelector('#formixModal');
-        const targets = Array.from(document.querySelectorAll('table#formixTable > tbody > tr a.btn.formixEdit'))
+        const targets = Array.from(document.querySelectorAll('table#formixTable > tbody > tr a.btn.formixEdit, table#formixTable > tbody > tr a.formixEdit'))
             .map(link => link.getAttribute('href'))
             .filter(Boolean);
-        if (!modalEl || !targets.length) return;
+        // Duplikate entfernen (falls die Tabelle einen Link mehrfach rendert)
+        const uniqueTargets = Array.from(new Set(targets));
+        if (!uniqueTargets.length) return;
 
         formixSandboxCheckRunning = true;
         let checkedCount = 0;
         try {
-            showNotification(`Sandbox-Check läuft (${targets.length} Formix)…`, 'info');
-            for (const href of targets) {
-                // den Edit-Link zu diesem Eintrag frisch suchen – die Tabelle kann sich zwischendurch neu geladen haben
-                const editLink = await cbWaitFor(() => document.querySelector(`table#formixTable a.btn.formixEdit[href="${href}"]`), 15000, 200);
-                if (!editLink) continue;
+            showNotification(`Sandbox-Check laeuft (${uniqueTargets.length} Formix)…`, 'info');
 
-                const modalBody = modalEl.querySelector('#formixBody');
-                if (modalBody) modalBody.innerHTML = ''; // damit nicht versehentlich das vorherige Formular ausgelesen wird
-                editLink.click();
-
-                // warten, bis das Popup offen und das Formular geladen ist
-                const sandboxCb = await cbWaitFor(() => modalEl.classList.contains('in')
-                    ? modalEl.querySelector('[type="checkbox"][name="sandbox"]')
-                    : null, 12000);
-
-                if (sandboxCb) {
-                    recordFormixSandboxResult(href, sandboxCb.checked);
-                    checkedCount++;
+            // Das Bearbeitungsformular jedes Formix direkt laden und die Sandbox-Checkbox auslesen.
+            // Kleine Helper-Funktion mit einem Retry, damit ein einzelner Aussetzer nicht gleich fehlschlaegt.
+            const readSandbox = async (href) => {
+                for (let attempt = 0; attempt < 2; attempt++) {
+                    try {
+                        const resp = await fetch(href, { credentials: 'include', headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+                        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                        const html = await resp.text();
+                        const doc = new DOMParser().parseFromString(html, 'text/html');
+                        const cb = doc.querySelector('[type="checkbox"][name="sandbox"]');
+                        if (cb) return cb.checked;
+                    } catch (e) { /* naechster Versuch */ }
                 }
+                return null; // konnte nicht gelesen werden
+            };
 
-                // Popup direkt wieder schließen und die Ausblendung abwarten
-                modalEl.querySelector('button.close')?.click();
-                await cbWaitFor(() => modalEl.classList.contains('in') ? null : true, 5000);
-                await new Promise(resolve => setTimeout(resolve, 300)); // Fade/Backdrop ausklingen lassen
+            // Alle parallel anstossen -> die langsamen Ladezeiten laufen gleichzeitig statt nacheinander.
+            const results = await Promise.all(uniqueTargets.map(async (href) => ({ href: href, checked: await readSandbox(href) })));
+
+            // Fehlgeschlagene Eintraege sammeln fuer optionalen Modal-Fallback.
+            const failed = [];
+            results.forEach((r) => {
+                if (r.checked === null) { failed.push(r.href); return; }
+                recordFormixSandboxResult(r.href, r.checked);
+                checkedCount++;
+            });
+
+            // Fallback: einzelne, die per fetch nicht klappten, klassisch ueber das Modal auslesen.
+            if (failed.length) {
+                const modalEl = document.querySelector('#formixModal');
+                if (modalEl) {
+                    for (const href of failed) {
+                        const editLink = await cbWaitFor(() => document.querySelector(`table#formixTable a.formixEdit[href="${href}"]`), 8000, 200);
+                        if (!editLink) continue;
+                        const modalBody = modalEl.querySelector('#formixBody');
+                        if (modalBody) modalBody.innerHTML = '';
+                        editLink.click();
+                        const sandboxCb = await cbWaitFor(() => modalEl.classList.contains('in')
+                            ? modalEl.querySelector('[type="checkbox"][name="sandbox"]')
+                            : null, 10000);
+                        if (sandboxCb) { recordFormixSandboxResult(href, sandboxCb.checked); checkedCount++; }
+                        modalEl.querySelector('button.close')?.click();
+                        await cbWaitFor(() => modalEl.classList.contains('in') ? null : true, 4000);
+                    }
+                }
             }
-            applyFormixSandboxLabels(); // falls die Tabelle zwischenzeitlich neu gerendert wurde
-            showNotification(`Sandbox-Check: ${checkedCount}/${targets.length} Formix geprüft`, checkedCount === targets.length ? 'success' : 'warning');
+
+            applyFormixSandboxLabels();
+            showNotification(`Sandbox-Check: ${checkedCount}/${uniqueTargets.length} Formix geprueft`, checkedCount === uniqueTargets.length ? 'success' : 'warning');
         } finally {
             formixSandboxCheckRunning = false;
         }
@@ -2386,122 +2555,64 @@
             btn.className = 'btn btn-info glyphicon glyphicon-check cb_formix_check_btn';
             btn.title = 'Sandbox aktivieren & E-Mail eintragen';
 
-            btn.addEventListener('click', function (e) {
+            btn.addEventListener('click', async function (e) {
                 e.preventDefault();
                 e.stopPropagation();
 
-                const editLink = row.querySelector('a.btn.formixEdit');
+                const editLink = row.querySelector('a.btn.formixEdit') || row.querySelector('a.formixEdit');
                 if (!editLink) return;
+                const href = editLink.getAttribute('href');
+                if (!href) return;
 
-                // formixEdit-Link anklicken
-                editLink.click();
+                // Doppelklicks/Mehrfachausloesung waehrend des Speicherns verhindern
+                if (btn.dataset.cbBusy === '1') return;
+                btn.dataset.cbBusy = '1';
+                const _origPointer = btn.style.pointerEvents;
+                btn.style.pointerEvents = 'none';
+                btn.style.opacity = '0.6';
 
-                // Warten, bis #formixModal die Klasse "in" bekommt
-                const modalEl = document.querySelector('#formixModal');
-                if (!modalEl) return;
+                try {
+                    // 1) Aktuelles Formular direkt laden (kein Modal noetig)
+                    const getResp = await fetch(href, { credentials: 'include', headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+                    if (!getResp.ok) throw new Error('GET ' + getResp.status);
+                    const getHtml = await getResp.text();
+                    const getDoc = new DOMParser().parseFromString(getHtml, 'text/html');
+                    const form = getDoc.querySelector('#formix-form') || getDoc.querySelector('form');
+                    if (!form) throw new Error('Formular nicht gefunden');
 
-                const observer = new MutationObserver(function (mutations, obs) {
-                    if (!modalEl.classList.contains('in')) return;
-                    obs.disconnect();
+                    const sandboxCb = form.querySelector('[type="checkbox"][name="sandbox"]');
+                    const sandboxEmail = form.querySelector('[type="text"][name="sandbox_email"]');
+                    if (!sandboxCb && !sandboxEmail) throw new Error('Sandbox-Felder nicht gefunden');
 
-                    // ── 1) Sandbox-Checkbox togglen ──────────────────────────
-                    const sandboxCb = modalEl.querySelector('.form-Group [type="checkbox"][name="sandbox"]')
-                                   || modalEl.querySelector('[type="checkbox"][name="sandbox"]');
+                    // 2) Wie bisher: Sandbox umschalten + feste Sandbox-E-Mail setzen
+                    let newChecked = null;
+                    if (sandboxCb) { newChecked = !sandboxCb.checked; sandboxCb.checked = newChecked; }
+                    if (sandboxEmail) { sandboxEmail.value = 'formix@wwwe.de'; }
 
-                    if (sandboxCb) {
-                        const wasChecked = sandboxCb.checked;
-                        sandboxCb.checked = !wasChecked;
-                        sandboxCb.dispatchEvent(new Event('change', { bubbles: true }));
-                        showNotification(
-                            sandboxCb.checked
-                                ? '✔ Sandbox aktiviert'
-                                : '✘ Sandbox deaktiviert'
-                        );
-                    } else {
-                        showNotification('Sandbox-Checkbox nicht gefunden', 'danger');
-                    }
-
-                    // ── 2) Sandbox-E-Mail befüllen ───────────────────────────
-                    const sandboxEmailInput = modalEl.querySelector('.form-Group [type="text"][name="sandbox_email"]')
-                                           || modalEl.querySelector('[type="text"][name="sandbox_email"]');
-
-                    if (sandboxEmailInput) {
-                        const storedSettings = JSON.parse(localStorage.getItem('settings') || '{}');
-                        const userEmailPrefix = storedSettings.user_email || '';
-
-                        if (userEmailPrefix) {
-                            const emailValue = userEmailPrefix + '@ew.de';
-                            sandboxEmailInput.value = emailValue;
-                            sandboxEmailInput.dispatchEvent(new Event('input', { bubbles: true }));
-                            sandboxEmailInput.dispatchEvent(new Event('change', { bubbles: true }));
-                            showNotification(`E-Mail gesetzt: ${emailValue}`);
-                        } else {
-                            showNotification(
-                                'E-Mail nicht gesetzt – bitte zuerst eine E-Mail-Adresse in den Userdaten angeben',
-                                'danger'
-                            );
-                        }
-                    } else {
-                        showNotification('Sandbox-E-Mail-Feld nicht gefunden', 'danger');
-                    }
-
-                    // Nur speichern wenn mind. Checkbox oder E-Mail erfolgreich gesetzt wurde
-                    const cbFound = !!modalEl.querySelector('.form-Group [type="checkbox"][name="sandbox"]')
-                                    || !!modalEl.querySelector('[type="checkbox"][name="sandbox"]');
-                    const emailFound = !!modalEl.querySelector('.form-Group [type="text"][name="sandbox_email"]')
-                                    || !!modalEl.querySelector('[type="text"][name="sandbox_email"]');
-
-                    if (!cbFound && !emailFound) return; // nichts zum Speichern
-
-                    // ── 3) Speichern ─────────────────────────────────────────
-                    modalEl.querySelector('#formixSave')?.click();
-
-                    // ── 4) Warten auf "Form saved"-Alert im #formixBody ──────
-                    const formixBody = modalEl.querySelector('#formixBody') || modalEl;
-                    const savedObs = new MutationObserver((_, sObs) => {
-                        const alert = formixBody.querySelector('.alert.alert-success');
-                        if (!alert || !alert.textContent.includes('Form saved')) return;
-                        sObs.disconnect();
-                        // (Der Sandbox-Stand wurde beim Klick auf Speichern zwischengemerkt und ist mit diesem "Form saved" bereits in die Markierung übernommen worden – siehe attachFormixModalWatcher)
-
-                        // ── 5) Modal schließen ────────────────────────────────
-                        modalEl.querySelector('button.close')?.click();
-
-                        // ── 6) Warten bis #loadingModal display:block > 3 s ──
-                        const loadingModal = document.querySelector('#loadingModal');
-                        if (!loadingModal) return;
-
-                        let blockSince = null;
-                        const loadingObs = new MutationObserver(() => {
-                            const isBlock = loadingModal.style.display === 'block';
-                            if (isBlock && blockSince === null) {
-                                blockSince = Date.now();
-                            } else if (!isBlock) {
-                                blockSince = null;
-                            }
-                        });
-                        loadingObs.observe(loadingModal, { attributes: true, attributeFilter: ['style'] });
-
-                        const isBlock = loadingModal.style.display === 'block';
-                        if (isBlock) {
-                                loadingModal.style.display = 'none';
-                        }
-
-                        // Sicherheits-Timeout nach 30 s
-                        setTimeout(() => {
-                            loadingObs.disconnect();
-                        }, 30000);
+                    // 3) Formular exakt wie der Browser serialisieren und per POST speichern
+                    const postResp = await fetch(form.getAttribute('action') || href, {
+                        method: 'POST',
+                        credentials: 'include',
+                        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+                        body: new FormData(form)
                     });
-                    savedObs.observe(formixBody, { childList: true, subtree: true });
+                    const postText = await postResp.text();
+                    const saved = postResp.ok && /Form saved/i.test(postText);
 
-                    // Sicherheits-Timeout für savedObs nach 15 s
-                    setTimeout(() => savedObs.disconnect(), 15000);
-                });
-
-                observer.observe(modalEl, { attributes: true, attributeFilter: ['class'] });
-
-                // Sicherheits-Timeout: Observer nach 10 s wieder entfernen
-                setTimeout(() => observer.disconnect(), 10000);
+                    if (saved) {
+                        // 4) Label sofort passend zum neuen Stand setzen (ohne Tabellen-Reload)
+                        if (newChecked !== null) recordFormixSandboxResult(href, newChecked);
+                        showNotification(newChecked ? '\u2714 Sandbox aktiviert & E-Mail eingetragen' : '\u2718 Sandbox deaktiviert', newChecked ? 'success' : 'info');
+                    } else {
+                        showNotification('Speichern fehlgeschlagen (HTTP ' + postResp.status + ')', 'danger');
+                    }
+                } catch (err) {
+                    showNotification('Fehler beim Sandbox-Setzen: ' + (err && err.message ? err.message : err), 'danger');
+                } finally {
+                    btn.dataset.cbBusy = '';
+                    btn.style.pointerEvents = _origPointer;
+                    btn.style.opacity = '';
+                }
             });
 
             firstTd.prepend(btn);
@@ -2549,6 +2660,9 @@
         const SPECIAL_PS_DEFAULTS = { // Vorgaben: bekannte Special-Tasks mit fester Standard-PS (per Klick weiterhin anpassbar); Schlüssel = "Gruppe Name" in Kleinschreibung
             'yourrate: implementierung': 1,
             'umsetzung: jobmanager einbinden': 0.5,
+            'scp: redaktionsplan erstellen': 1,
+            'sonderaufgabe: javascript / merkzettel': 1,
+            'sonderaufgabe: php / collect/merkzettel': 2,
         };
 
         const findPanelByTitle = (title) => Array.from(document.querySelectorAll('.panel'))

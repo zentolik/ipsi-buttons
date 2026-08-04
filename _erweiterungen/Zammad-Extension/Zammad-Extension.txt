@@ -1,0 +1,732 @@
+// ==UserScript==
+// @name         Zammad-Extension
+// @namespace    https://github.com/zentolik
+// @version      0.03
+// @description  Erstellt Zammad-Tickets aus IPSI (Migration von OTRS-Extension) - benötigt Copy-Buttons Version 1.00 oder neuer!
+// @author       Zentolik
+// @match        https://tickets.wwwe.systems/*
+// @match        https://doku.securewebsystems.net/archive*
+// @updateURL    https://github.com/zentolik/ipsi-buttons/raw/main/_erweiterungen/Zammad-Extension/Zammad-Extension.user.js
+// @downloadURL  https://github.com/zentolik/ipsi-buttons/raw/main/_erweiterungen/Zammad-Extension/Zammad-Extension.user.js
+// @grant        none
+// @run-at       document-idle
+// ==/UserScript==
+
+(function () {
+    'use strict';
+
+    /* ===== EARLY CAPTURE: cb-Payload sofort sichern, bevor die DOKU-SPA
+       die URL umschreibt (?cb=... + #wwwe_dt gehen sonst verloren). ===== */
+    (function captureCbEarly(){
+        try {
+            if (location.hostname.indexOf("doku.") < 0) return;
+            var src = (location.search || "") + (location.hash || "");
+            var m = src.indexOf("cb=");
+            if (m < 0) return;
+            var raw = src.slice(m + 3);
+            // bis zum naechsten Trenner (& oder #) abschneiden
+            raw = raw.split("&")[0].split("#")[0];
+            if (!raw) return;
+            sessionStorage.setItem("wwwe_dt_cb", raw);
+        } catch (e) {}
+    })();
+
+    /* ===== 0) PAYLOAD READER (#cb=<urlencoded JSON>) ===== */
+    function readPayload() {
+        var h = location.hash || '';
+        var marker = '#cb=';
+        var i = h.indexOf(marker);
+        if (i < 0) return null;
+        var raw = h.slice(i + marker.length);
+        try { return JSON.parse(decodeURIComponent(raw)); }
+        catch (e) { try { return JSON.parse(raw); } catch (e2) { return null; } }
+    }
+
+    /* ===== 1) GROUP MAP (Brand -> group IDs) [live-verified] ===== */
+    var GROUP_MAP = {
+        'Euroweb':              { web: 443, aktu: 446, dritttermin: 500, onlineschaltung: 501, yourrate: 542 },
+        'Internet Media':       { web: 451, aktu: 454, dritttermin: 506, onlineschaltung: 507, yourrate: 543 },
+        'Stuttgarter Zeitung':  { web: 459, aktu: 462, dritttermin: 512, onlineschaltung: 513, yourrate: 544 },
+        'United Media':         { web: 467, aktu: 470, dritttermin: 518, onlineschaltung: 519, yourrate: 545 },
+        'United Media Schweiz': { web: 475, aktu: 478, dritttermin: 524, onlineschaltung: 525, yourrate: 546 },
+        'WESTFALEN-BLATT':      { web: 483, aktu: 486, dritttermin: 536, onlineschaltung: 537, yourrate: 548 },
+        'WN OnlineService':     { web: 491, aktu: 494, dritttermin: 530, onlineschaltung: 531, yourrate: 547 }
+    };
+    function resolveBrand(data) {
+        var b = (data.project_brand || data.client_brand || '').trim();
+        var comp = (data.project_company || '').toLowerCase();
+        if (comp.indexOf('schweiz') >= 0 || comp.indexOf('switzerland') >= 0) {
+            if (b === 'United Media') return 'United Media Schweiz';
+        }
+        if (GROUP_MAP[b]) return b;
+        var keys = Object.keys(GROUP_MAP);
+        for (var i = 0; i < keys.length; i++) {
+            if (b.toLowerCase().indexOf(keys[i].toLowerCase()) >= 0) return keys[i];
+        }
+        return 'Euroweb';
+    }
+
+    /* ===== 2) STATE MAP ===== */
+    var STATE = { neu: 1, closed_successful: 2, closed_unsuccessful: 3, offen: 4, bearbeitung_sc: 10, warten_erinnerung: 6 };
+
+    /* ===== 3) HELPERS ===== */
+    function pickVisible(selector) {
+        var all = document.querySelectorAll(selector);
+        for (var i = 0; i < all.length; i++) { if (all[i].offsetParent !== null) return all[i]; }
+        return null;
+    }
+    function waitForElm(selector, timeout) {
+        timeout = timeout || 15000;
+        return new Promise(function (resolve, reject) {
+            var found = pickVisible(selector);
+            if (found) return resolve(found);
+            var to = setTimeout(function () { obs.disconnect(); reject(new Error('timeout ' + selector)); }, timeout);
+            var obs = new MutationObserver(function () {
+                var el = pickVisible(selector);
+                if (el) { clearTimeout(to); obs.disconnect(); resolve(el); }
+            });
+            obs.observe(document.body, { childList: true, subtree: true });
+        });
+    }
+    function setNativeValue(el, value) {
+        var proto = Object.getPrototypeOf(el);
+        var desc = Object.getOwnPropertyDescriptor(proto, 'value');
+        if (desc && desc.set) { desc.set.call(el, value); } else { el.value = value; }
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    function delay(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+    function escapeHtml(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+    /* ===== 4) FIELD SETTERS ===== */
+    function switchTab(type) {
+        var tab = pickVisible('.tab[data-type="' + type + '"]');
+        if (tab) { tab.click(); return true; }
+        return false;
+    }
+    async function fillTitle(title) {
+        var el = await waitForElm('input[name="title"]');
+        setNativeValue(el, title);
+    }
+    async function fillKundennummer(nr) {
+        var el = pickVisible('input[name="kundennummer"]');
+        if (el) setNativeValue(el, nr || '');
+    }
+    async function fillBody(content) {
+        var el = await waitForElm('div[contenteditable="true"][data-name="body"], div[data-name="body"]');
+        el.focus();
+        var msgHtml = (content && typeof content === "object" && content.html != null)
+            ? content.html
+            : String(content).split("\n").map(function (l) { return escapeHtml(l); }).join("<br>");
+        // Preserve the Grußformel/Signatur that Zammad renders on group change.
+        var sig = el.querySelector('[data-signature="true"]');
+        if (sig) {
+            var wrap = document.createElement("div");
+            wrap.innerHTML = msgHtml + "<br><br>";
+            // remove leading <br> that Zammad puts before the signature
+            while (sig.previousSibling && sig.previousSibling.nodeName === "BR") { sig.previousSibling.remove(); }
+            var ref = sig;
+            while (wrap.firstChild) { el.insertBefore(wrap.firstChild, ref); }
+        } else {
+            el.innerHTML = msgHtml;
+        }
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("keyup", { bubbles: true }));
+        el.dispatchEvent(new Event("blur", { bubbles: true }));
+    }
+    async function setSelectByName(name, value) {
+        var el = pickVisible('select[name="' + name + '"]');
+        if (el) setNativeValue(el, String(value));
+    }
+    async function setGroupById(id) {
+        var shadow = pickVisible('input.searchableSelect-shadow[name="group_id"]');
+        if (!shadow) { await delay(300); shadow = pickVisible('input.searchableSelect-shadow[name="group_id"]'); }
+        if (!shadow) return false;
+        var wrap = shadow.closest('.searchableSelect') || shadow.parentElement;
+        var main = wrap.querySelector('input.searchableSelect-main');
+        if (main) { main.focus(); main.click(); }
+        await delay(200);
+        var li = wrap.querySelector('li[data-value="' + id + '"]');
+        if (!li) {
+            var lis = document.querySelectorAll('li[data-value="' + id + '"]');
+            for (var i = 0; i < lis.length; i++) { if (lis[i].offsetParent !== null) { li = lis[i]; break; } }
+        }
+        if (!li) return false;
+        li.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+        li.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+        li.click();
+        await delay(150);
+        if (String(shadow.value) !== String(id)) setNativeValue(shadow, String(id));
+        // Zammad laedt die Signatur/Grussformel erst, wenn auf dem group_id-Feld
+        // ein (jQuery-)change-Event feuert. Beim programmatischen Setzen passiert
+        // das nicht automatisch -> hier explizit ausloesen.
+        try {
+            var jq = window.jQuery || window.$;
+            if (jq) { jq(shadow).trigger("change"); }
+        } catch (e) {}
+        shadow.dispatchEvent(new Event("change", { bubbles: true }));
+        await delay(400); // Signatur rendern lassen
+        return true;
+    }
+
+    /* ===== 5) CUSTOMER (NO new-customer creation!) ===== */
+    async function fillCustomer(email) {
+        var input = await waitForElm('input[name="customer_id_completion"]');
+        input.focus();
+        setNativeValue(input, email || '');
+        input.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'a' }));
+        input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'a' }));
+        var list = null;
+        for (var t = 0; t < 30; t++) {
+            list = pickVisible('ul.recipientList.is-shown') || document.querySelector('ul.recipientList.is-shown');
+            if (list && list.querySelectorAll('li.recipientList-entry').length) break;
+            await delay(150);
+        }
+        if (!list) return;
+        var entries = list.querySelectorAll('li.recipientList-entry.js-object[data-object-id]');
+        var match = null;
+        for (var i = 0; i < entries.length; i++) {
+            var txt = (entries[i].textContent || '').toLowerCase();
+            if (email && txt.indexOf(email.toLowerCase()) >= 0) { match = entries[i]; break; }
+        }
+        if (!match && entries.length === 1) match = entries[0];
+        if (match) {
+            match.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+            match.click();
+        }
+        // no match: leave typed email, NEVER click li.recipientList--new
+    }
+
+    /* ===== 6) GENDER / ANREDE POPUP (kept; MB popup removed) ===== */
+    function askGender(defaultName, hasDemo, isAktu) {
+    return new Promise(function (resolve) {
+        var overlay = document.createElement("div");
+        overlay.style.cssText = "position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,0.55);display:flex;align-items:center;justify-content:center;";
+        var box = document.createElement("div");
+        box.className = "box";
+        box.style.cssText = "background:#38393e;color:#dbdbdc;border:1px solid #2a2a2d;border-radius:8px;padding:24px 28px;min-width:380px;max-width:460px;box-shadow:0 12px 40px rgba(0,0,0,0.5);font-family:\u0027Fira Sans\u0027,sans-serif;text-transform:none;";
+        var h = document.createElement("h2");
+        h.textContent = "Anrede & Optionen";
+        h.style.cssText = "margin:0 0 6px;font-size:18px;font-weight:600;color:#fff;text-transform:none;";
+        var p = document.createElement("p");
+        p.textContent = defaultName ? ("Kunde: " + defaultName) : "";
+        p.style.cssText = "margin:0 0 16px;font-size:13px;color:#a4a4a6;text-transform:none;";
+        box.appendChild(h); box.appendChild(p);
+
+        var anredeState = { value: null };
+        var lbl1 = document.createElement("div"); lbl1.textContent = "Anrede"; lbl1.style.cssText = "font-size:12px;color:#a4a4a6;margin:0 0 6px;";
+        box.appendChild(lbl1);
+        var row = document.createElement("div"); row.style.cssText = "display:flex;flex-direction:column;gap:8px;margin-bottom:16px;";
+        var opts = [["Sehr geehrter Herr", "Sehr geehrter Herr"], ["Sehr geehrte Frau", "Sehr geehrte Frau"], ["Guten Tag", "Guten Tag (neutral)"]];
+        opts.forEach(function (o) {
+            var b2 = document.createElement("button");
+            b2.type = "button"; b2.className = "btn btn--no-margin"; b2.setAttribute("data-g", o[0]); b2.textContent = o[1];
+            b2.style.cssText = "text-align:left;padding:9px 14px;border-radius:4px;cursor:pointer;text-transform:none;font-size:14px;";
+            b2.addEventListener("click", function(){ anredeState.value = o[0]; Array.prototype.forEach.call(row.children, function(c){ c.style.outline = "none"; }); b2.style.outline = "2px solid hsl(203,65%,55%)"; });
+            row.appendChild(b2);
+        });
+        box.appendChild(row);
+
+        var optState = { qImages:false, scp:false, qr:false };
+        var optWrap = document.createElement("div"); optWrap.style.cssText = "margin-bottom:16px;";
+        var lbl2 = document.createElement("div"); lbl2.textContent = "Optionale Bl\u00f6cke (nur Live-Vorlage)"; lbl2.style.cssText = "font-size:12px;color:#a4a4a6;margin:0 0 6px;";
+        optWrap.appendChild(lbl2);
+        function optCheck(key, label){
+            var r = document.createElement("label"); r.style.cssText = "display:flex;align-items:center;gap:8px;margin:5px 0;cursor:pointer;text-transform:none;font-weight:normal;font-size:14px;";
+            var cb = document.createElement("input"); cb.type = "checkbox";
+            cb.addEventListener("change", function(){ optState[key] = cb.checked; });
+            var s = document.createElement("span"); s.textContent = label;
+            r.appendChild(cb); r.appendChild(s); return r;
+        }
+        optWrap.appendChild(optCheck("qImages", "Bildqualit\u00e4ts-Block"));
+        optWrap.appendChild(optCheck("scp", "SocialContentPilot-Block"));
+        optWrap.appendChild(optCheck("qr", "QR-Code-Block"));
+        if (!isAktu) box.appendChild(optWrap);
+
+        var actions = document.createElement("div"); actions.style.cssText = "display:flex;gap:10px;flex-wrap:wrap;margin-top:4px;";
+        function finish(template){
+            overlay.remove();
+            resolve({ anrede: anredeState.value || "Guten Tag", template: template, opts: optState });
+        }
+        var mainLabel = isAktu ? "Aktualisierung erstellen" : "Website ver\u00f6ffentlichen (Live)";
+        var mainTpl = isAktu ? "aktu" : "live";
+        var btnMain = document.createElement("button"); btnMain.type = "button"; btnMain.className = "btn btn--primary"; btnMain.textContent = mainLabel;
+        btnMain.style.cssText = "padding:9px 16px;border-radius:4px;cursor:pointer;text-transform:none;font-size:14px;";
+        btnMain.addEventListener("click", function(){ finish(mainTpl); });
+        actions.appendChild(btnMain);
+        if (!isAktu && hasDemo) {
+            var btnDemo = document.createElement("button"); btnDemo.type = "button"; btnDemo.className = "btn"; btnDemo.textContent = "Auf Demo schlie\u00dfen";
+            btnDemo.style.cssText = "padding:9px 16px;border-radius:4px;cursor:pointer;text-transform:none;font-size:14px;";
+            btnDemo.addEventListener("click", function(){ finish("demo"); });
+            actions.appendChild(btnDemo);
+        }
+        box.appendChild(actions);
+        overlay.appendChild(box);
+        document.body.appendChild(overlay);
+        overlay.addEventListener("click", function (e) { if (e.target === overlay) { overlay.remove(); resolve({ anrede: "Guten Tag", template: (isAktu?"aktu":"live"), opts: optState }); } });
+    });
+    }
+
+    /* ===== 7) TEMPLATES (Working Guide) ===== */
+    /* ===== BRAND CONTACTS (email/domain je Marke) ===== */
+    var BRAND_CONTACT = {
+        'Euroweb':              { email: 'info@euroweb.de',                          domain: 'https://www.euroweb.de/' },
+        'Internet Media':       { email: 'office@internet-media.at',                 domain: 'https://www.internet-media.com/' },
+        'Stuttgarter Zeitung':  { email: 'info@stz-onlineservice.de',                domain: 'https://www.stz-onlineservice.de/' },
+        'United Media':         { email: 'info@united-media.de',                     domain: 'https://www.united-media.de/' },
+        'United Media Schweiz': { email: 'info@united-media.ch',                     domain: 'https://www.united-media.de/' },
+        'WESTFALEN-BLATT':      { email: 'info@westfalen-blatt-onlineservice.de',    domain: 'https://www.westfalen-blatt-onlineservice.de/' },
+        'WN OnlineService':     { email: 'info@wn-onlineservice.de',                 domain: 'https://www.wn-onlineservice.de/' }
+    };
+    function brandContact(data) {
+        var b = resolveBrand(data);
+        return BRAND_CONTACT[b] || { email: 'info@wwwe.de', domain: 'https://www.wwwe.de/' };
+    }
+    function cleanDomain(d) { return String(d || "").replace(/^https?:\/\//i, "").replace(/\/$/, ""); }
+    // Domain als fett dargestellter Link: Anzeige "www.x.tld", href "https://www.x.tld/"
+    function domainLinkHtml(d) {
+        var shown = cleanDomain(d);
+        if (!shown) return "";
+        var href = "https://" + shown + "/";
+        return '<strong><a href="' + href + '">' + escapeHtml(shown) + '</a></strong>';
+    }
+
+    /* ===== ZT-MAILVORLAGEN (Betreff + Body) ===== */
+    // anredeName = z.B. "Sehr geehrter Herr Mustermann" oder "Guten Tag"
+    // opts = { qImages, scp, qr } (optionale Bloecke, nur Live)
+    function ztSubjectLive(kdnr)  { return kdnr + " \u2013 Ver\u00f6ffentlichung Ihrer Website"; }
+    function ztSubjectDemo(kdnr)  { return kdnr + " \u2013 Ver\u00f6ffentlichung Ihrer Website im Demobereich"; }
+    function ztSubjectAktu(kdnr)  { return kdnr + " \u2013 Fertigstellung Ihrer Aktualisierung"; }
+function ztSubjectKorrektur(kdnr) { return kdnr + " – Fertigstellung Ihrer Korrektur"; }
+
+    function ztBodyLive(anredeName, live, brandDomain, opts) {
+        opts = opts || {};
+        function E(s){ return escapeHtml(s); }
+        var liveHtml = live ? domainLinkHtml(live) : "www.live-domain.tld";
+        var brandHtml = brandDomain ? domainLinkHtml(brandDomain) : "https://www.branddomain.tld/";
+        var L = [];
+        L.push(E((anredeName || "Guten Tag") + ","));
+        L.push("");
+        L.push(E("es ist geschafft! Wir haben Ihre Website nun genau nach Ihren individuellen W\u00fcnschen angepasst und erfolgreich online gestellt. Das Ergebnis k\u00f6nnen Sie sich direkt hier anschauen: ") + liveHtml + E("."));
+        L.push("");
+        L.push(E("Falls die Website bei Ihnen noch nicht sofort korrekt angezeigt wird, aktualisieren Sie bitte Ihren Browser oder laden Sie die Seite mit STRG + F5 neu."));
+        L.push("");
+        if (opts.qImages) {
+            L.push(E("Bei einigen Bildern haben wir festgestellt, dass diese f\u00fcr die vorgesehene Darstellung qualitativ nicht optimal geeignet sind. Damit Ihre Website auch visuell einen bestm\u00f6glichen Eindruck hinterl\u00e4sst, freuen wir uns \u00fcber geeignetes Ersatzmaterial. Betroffen sind insbesondere:"));
+            L.push("");
+            L.push(E("**** Slideshowbild"));
+            L.push(E("**** Bildpfad"));
+            L.push(E("**** Link zur Seite oder \u00c4hnliches"));
+            L.push(E("+++Bitte alle minderwertigen Bilder auff\u00fchren+++"));
+            L.push("");
+            L.push(E("Sie k\u00f6nnen uns das neue Material ganz einfach und schnell \u00fcber Ihr Service-Portal zukommen lassen."));
+            L.push("");
+        }
+        if (opts.scp) {
+            L.push(E("Wir freuen uns au\u00dferdem, Ihnen heute mitteilen zu k\u00f6nnen, dass Ihr SocialContentPilot bereit ist, Ihre Botschaften und Ihre CI in die spannende Welt des Social Media zu tragen! Die ersten Posts sind bereits erstellt und der Redaktionsplan steht. \u00dcber Ihr Service-Portal k\u00f6nnen Sie dabei die Posts anpassen (wenn n\u00f6tig) und freigeben."));
+            L.push("");
+        }
+        if (opts.qr) {
+            L.push(E("Gerne erstellen wir f\u00fcr Sie noch den gew\u00fcnschten QR-Code. Bitte teilen Sie uns mit, was der QR-Code beinhalten soll und in welchem Format Sie diesen ben\u00f6tigen."));
+            L.push("");
+        }
+        L.push(E("In K\u00fcrze f\u00fchren wir zudem eine gr\u00fcndliche Qualit\u00e4tssicherung Ihrer Website durch, um sicherzustellen, dass Ihre Seite fehlerfrei und in bestm\u00f6glicher Qualit\u00e4t im Internet zu finden ist."));
+        L.push("");
+        L.push(E("Um sicherzustellen, dass uns Ihre \u00c4nderungsw\u00fcnsche auch weiterhin schnell erreichen, bitten wir Sie, \u00c4nderungen direkt \u00fcber Ihr Service-Portal einzureichen. Loggen Sie sich dazu einfach mit Ihren Zugangsdaten unter ") + brandHtml + E(" ein."));
+        L.push("");
+        L.push(E("Wir m\u00f6chten uns f\u00fcr das Vertrauen bedanken, das Sie in uns gesetzt haben. Wir sind \u00fcberzeugt, dass Ihre neue Website Ihnen dabei helfen wird, Ihre Ziele zu erreichen und Ihr Unternehmen erfolgreich im Netz zu pr\u00e4sentieren."));
+        L.push("");
+        L.push(E("Wir w\u00fcnschen Ihnen viel Erfolg mit Ihrer neuen Website und stehen Ihnen jederzeit f\u00fcr Fragen oder Anpassungen zur Verf\u00fcgung!"));
+        return { html: L.join("<br>") };
+    }
+
+    function ztBodyDemo(anredeName, demo, groupEmail, groupDomain) {
+        function E(s){ return escapeHtml(s); }
+        var demoHtml = demo ? domainLinkHtml(demo) : "www.demo-domain.tld";
+        var groupDomHtml = groupDomain ? domainLinkHtml(groupDomain) : "https://www.united-media.de";
+        var L = [];
+        L.push(E((anredeName || "Guten Tag") + ","));
+        L.push("");
+        L.push(E("nach Abschluss aller aktuell m\u00f6glichen Arbeiten haben wir Ihre Website in unserem Demobereich zur Ansicht f\u00fcr Sie bereitgestellt. Sie k\u00f6nnen sie unter folgendem Link einsehen:"));
+        L.push(demoHtml);
+        L.push("");
+        L.push(E("Bitte beachten Sie, dass Ihre Website derzeit noch nicht unter Ihrer gew\u00fcnschten Domain erreichbar ist."));
+        L.push("");
+        L.push(E("Damit Ihre Website unter Ihrer gew\u00fcnschten Domain online gehen kann, sind noch technische Abstimmungen im Zusammenhang mit Ihrer Domain erforderlich. Bitte setzen Sie sich hierzu noch einmal mit Ihrer zust\u00e4ndigen Medienberatung in Verbindung, damit die Ver\u00f6ffentlichung vorbereitet werden kann. Sie erreichen diese auch per E-Mail an " + (groupEmail || "info@united-media.de") + "."));
+        L.push("");
+        L.push(E("Wir freuen uns au\u00dferdem, Ihnen heute mitteilen zu k\u00f6nnen, dass Ihr SocialContentPilot bereit ist, Ihre Botschaften und Ihre CI in die spannende Welt des Social Media zu tragen! Die ersten Posts sind bereits erstellt und der Redaktionsplan steht. \u00dcber Ihr Service-Portal k\u00f6nnen Sie dabei die Posts anpassen (wenn n\u00f6tig) und freigeben."));
+        L.push("");
+        L.push(E("Damit uns Ihre \u00c4nderungsw\u00fcnsche auch weiterhin schnell und zuverl\u00e4ssig erreichen, bitten wir Sie, diese direkt \u00fcber Ihr Service-Portal einzureichen. Loggen Sie sich dazu einfach mit Ihren Zugangsdaten unter ") + groupDomHtml + E(" ein."));
+        L.push("");
+        L.push(E("Wir danken Ihnen f\u00fcr Ihre Zusammenarbeit und stehen Ihnen jederzeit zur Verf\u00fcgung, um Ihre W\u00fcnsche und Fragen zu beantworten. Gemeinsam bringen wir Ihr Projekt erfolgreich zum Abschluss!"));
+        return { html: L.join("<br>") };
+    }
+
+    function ztBodyAktu(anredeName, live) {
+        function E(s){ return escapeHtml(s); }
+        var liveHtml = live ? domainLinkHtml(live) : "www.live-domain.tld";
+        var L = [];
+        L.push(E((anredeName || "Guten Tag") + ","));
+        L.push("");
+        L.push(E("wir haben folgende \u00c4nderungen auf Ihrer Internetseite durchgef\u00fchrt:"));
+        L.push("");
+        L.push(E("(Hier eine kurze Zusammenfassung der \u00c4nderungen aufschreiben | Auff\u00fchrung der fehlenden Materialien | Anmerkungen Demobereich | Aktualisierungsanzahl aufgebraucht | Wichtige Informationen zur Aktualisierung)"));
+        L.push("");
+        L.push(E("Die \u00c4nderungen stehen Ihnen unter ") + liveHtml + E(" zur Ansicht bereit."));
+        L.push("");
+        L.push(E("Sollten Sie Anmerkungen zu den durchgef\u00fchrten \u00c4nderungen haben, z\u00f6gern Sie bitte nicht, damit uns dar\u00fcber zu informieren. Um Ihre Anfrage direkt zuordnen und dadurch schneller bearbeiten zu k\u00f6nnen, antworten Sie uns bitte direkt auf diese E-Mail."));
+        L.push("");
+        L.push(E("Beachten Sie: Sollten Sie die ausgef\u00fchrten \u00c4nderungen nicht sehen k\u00f6nnen oder es zu Fehldarstellungen kommen, liegt dies in vielen F\u00e4llen am lokalen Zwischenspeicher Ihres Browsers. Um den Zwischenspeicher Ihrer Internetseite zu leeren, besuchen Sie diese bitte und dr\u00fccken STRG + F5 auf Ihrer Tastatur. Die Seite sollte sich nun neu laden."));
+        L.push(E("__________________________________________________________________________"));
+        L.push(E("Nutzen Sie zuk\u00fcnftig bitte das komfortable Anfrageformular."));
+        L.push("");
+        L.push(E("Damit uns Ihre W\u00fcnsche zuk\u00fcnftig schneller erreichen und wir diese effektiver bearbeiten k\u00f6nnen, nutzen Sie bitte das komfortable Anfrageformular, welches Sie in Ihrem pers\u00f6nlichen Kundenbereich finden k\u00f6nnen. Melden Sie sich hierzu ganz einfach mit Ihren bekannten Zugangsdaten auf unserer Unternehmens-Webseite an und w\u00e4hlen in der oberen Men\u00fcleiste den Punkt \u201eAktualisierung anfordern\u201c. Sie k\u00f6nnen uns jetzt im Detail all Ihre W\u00fcnsche und auch entsprechende Materialien per Datei-Upload zukommen lassen."));
+        L.push("");
+        L.push(E("Um Ihre W\u00fcnsche auch zuk\u00fcnftig zu Ihrer vollsten Zufriedenheit umsetzen zu k\u00f6nnen, bitten wir Sie darum, diese so genau wie m\u00f6glich zu beschreiben und bereits alle notwendigen Materialien innerhalb einer Anfrage zukommen zu lassen. Vielen Dank f\u00fcr Ihre Mitarbeit!"));
+        return { html: L.join("<br>") };
+    }
+
+    var TPL = {
+        yourrate_body: [
+            'Hallo,', '',
+            'unser Kunde bekommt einen YourRate Eintrag. Hier die nötigen Informationen zur Aktivierung:', '',
+            '- Firmenlogo siehe Anhang', '',
+            '- Beschreibungstext: …', '',
+            'Vielen Dank!'
+        ].join('\n'),
+        vl_body: function (anredeName, kdnr, demoLink) {
+            var linkPreview = String(demoLink || "").replace(/^https?:\/\//i, "").replace(/\/$/, "");
+            var linkHtml = linkPreview
+                ? '<strong>' + escapeHtml(linkPreview) + '</strong>'
+                : '<strong>[DEMO-LINK]</strong>';
+            var lines = [
+                "Hallo " + escapeHtml(anredeName || "[KD ANREDE UND NAME]") + ",", "",
+                "ich habe die Änderungswünsche vom ZT „" + escapeHtml(kdnr || "Kd-Nr.") + "“ durchgeführt. Die Website findest du unter dem Vorablink " + linkHtml + ".", "",
+                "Folgende Änderungen wurden gemacht:", "",
+                "- Auflistung der Änderungswünsche", "",
+                "Ich bitte um Rückmeldung, wenn du den Vorablink mit dem Kunden besprochen hast."
+            ];
+            return { html: lines.map(function (l) { return l === "" ? "" : l; }).join("<br>") };
+        },
+        domaintransfer_body: function (kdnr, hunter) {
+            return "Ich bin fertig, die Website kann online gestellt werden.";
+        }
+    };
+
+    /* ===== 8) SUBJECTS ===== */
+    function subjectDomaintransfer(kdnr, hunter) {
+        return kdnr + ' – Domaintransfer starten | ' + (hunter && hunter.trim() ? hunter.trim() : '+++Zuständiger MB+++');
+    }
+    function subjectYourRate(kdnr) { return kdnr + ' – YourRate Aktivierung'; }
+    function subjectVL(kdnr) { return kdnr + ' – Dritttermin – VL'; }
+
+    function ownEmail(data) {
+        var pfx = (data.user_email || '').split('@')[0];
+        return pfx ? (pfx + '@' + 'wwwe' + '.de') : '';
+    }
+
+    /* ===== 9) MAIN DISPATCHER (Zammad) ===== */
+    /* ===== YourRate Popups (bewegbar, schliessbar, abhakbar) ===== */
+    function makeDraggablePopup(id, titleText, contentNode, x, y, w) {
+        var ex = document.getElementById(id); if (ex) ex.remove();
+        var pop = document.createElement("div");
+        pop.id = id;
+        pop.className = "box";
+        pop.style.cssText = "position:fixed;top:" + y + "px;left:" + x + "px;width:" + w + "px;z-index:2147483000;box-shadow:0 8px 30px rgba(0,0,0,.5);border-radius:6px;overflow:hidden;text-transform:none;letter-spacing:normal;";
+        var head = document.createElement("div");
+        head.style.cssText = "display:flex;align-items:center;justify-content:space-between;margin:-20px -24px 12px;padding:8px 12px;cursor:move;background:rgba(0,0,0,.2);border-bottom:1px solid rgba(255,255,255,.08);user-select:none;text-transform:none;";
+        var ttl = document.createElement("span");
+        ttl.textContent = titleText;
+        ttl.style.cssText = "font-weight:600;font-size:13px;";
+        var ctrls = document.createElement("span");
+        ctrls.style.cssText = "display:flex;gap:6px;align-items:center;";
+        var moveHint = document.createElement("span");
+        moveHint.textContent = "\u273D";
+        moveHint.title = "Verschieben";
+        moveHint.style.cssText = "opacity:.6;font-size:14px;cursor:move;";
+        var closeBtn = document.createElement("button");
+        closeBtn.type = "button";
+        closeBtn.className = "btn";
+        closeBtn.textContent = "\u2715";
+        closeBtn.title = "Schliessen";
+        closeBtn.style.cssText = "padding:0 8px;line-height:22px;font-size:14px;";
+        closeBtn.addEventListener("click", function () { pop.remove(); });
+        ctrls.appendChild(moveHint); ctrls.appendChild(closeBtn);
+        head.appendChild(ttl); head.appendChild(ctrls);
+        pop.appendChild(head); pop.appendChild(contentNode);
+        document.body.appendChild(pop);
+        var drag = false, ox = 0, oy = 0;
+        head.addEventListener("mousedown", function (e) { if (e.target === closeBtn) return; drag = true; ox = e.clientX - pop.offsetLeft; oy = e.clientY - pop.offsetTop; e.preventDefault(); });
+        document.addEventListener("mousemove", function (e) { if (!drag) return; pop.style.left = (e.clientX - ox) + "px"; pop.style.top = (e.clientY - oy) + "px"; });
+        document.addEventListener("mouseup", function () { drag = false; });
+        return pop;
+    }
+
+    function applyYourRatePulse(pop) {
+    if (!pop) return;
+    // Pulsieren nur, solange es in dieser Session noch nicht weggeklickt wurde.
+    var DISMISS_KEY = "wwwe_yr_pulse_dismissed";
+    try { if (sessionStorage.getItem(DISMISS_KEY)) return; } catch (e) {}
+    // CSS (Keyframes + Klasse) einmalig injizieren.
+    if (!document.getElementById("cb_yr_pulse_style")) {
+        var st = document.createElement("style");
+        st.id = "cb_yr_pulse_style";
+        st.textContent = ""
+            + "@keyframes cbYrPulse {"
+            +   "0% { box-shadow: 0 8px 30px rgba(0,0,0,.5), 0 0 0 0 hsla(203,65%,55%,0.85); }"
+            +   "70% { box-shadow: 0 8px 30px rgba(0,0,0,.5), 0 0 0 18px hsla(203,65%,55%,0); }"
+            +   "100% { box-shadow: 0 8px 30px rgba(0,0,0,.5), 0 0 0 0 hsla(203,65%,55%,0); }"
+            + "}"
+            + ".cb_yr_pulse {"
+            +   "animation: cbYrPulse 1.4s ease-out infinite;"
+            +   "outline: 2px solid hsl(203,65%,55%);"
+            + "}";
+        document.head.appendChild(st);
+    }
+    pop.classList.add("cb_yr_pulse");
+    // Erster Klick auf das Popup -> Pulsieren dauerhaft (Session) beenden.
+    var stopPulse = function () {
+        pop.classList.remove("cb_yr_pulse");
+        try { sessionStorage.setItem(DISMISS_KEY, "1"); } catch (e) {}
+        pop.removeEventListener("mousedown", stopPulse, true);
+    };
+    pop.addEventListener("mousedown", stopPulse, true);
+}
+
+    function showYourRatePopups(data) {
+        var liveDomain = (data && data.live_domain) ? String(data.live_domain).replace(/^https?:\/\//i, "").replace(/\/$/, "") : "";
+        function checkItem(labelNode) {
+            var row = document.createElement("label");
+            row.style.cssText = "display:flex;align-items:flex-start;gap:8px;margin:6px 0;cursor:pointer;text-transform:none;font-weight:normal;";
+            var cb = document.createElement("input"); cb.type = "checkbox"; cb.style.marginTop = "3px";
+            var span = document.createElement("span");
+            if (typeof labelNode === "string") span.textContent = labelNode; else span.appendChild(labelNode);
+            cb.addEventListener("change", function () { span.style.textDecoration = cb.checked ? "line-through" : "none"; span.style.opacity = cb.checked ? ".55" : "1"; });
+            row.appendChild(cb); row.appendChild(span);
+            return row;
+        }
+        var c = document.createElement("div");
+        c.style.cssText = "font-size:13px;line-height:1.5;text-transform:none;";
+        var intro = document.createElement("p");
+        intro.textContent = "Damit der Support den Eintrag anlegen kann, benötigt er:";
+        intro.style.margin = "0 0 10px";
+        c.appendChild(intro);
+        c.appendChild(checkItem("Firmenlogo"));
+        var descWrap = document.createElement("span");
+        descWrap.appendChild(document.createTextNode("kurzen Beschreibungstext zum Unternehmen (oder Link zur neuen Startseite im Demobereich, falls bereits fertig) "));
+        var promptIcon = document.createElement("button");
+        promptIcon.type = "button"; promptIcon.className = "btn"; promptIcon.textContent = "\uD83D\uDCAC";
+        promptIcon.title = "KI-Prompt anzeigen";
+        promptIcon.style.cssText = "padding:0 6px;line-height:18px;font-size:12px;";
+        descWrap.appendChild(promptIcon);
+        c.appendChild(checkItem(descWrap));
+        var _yrPop = makeDraggablePopup("cb_yr_pop", "YourRate – Support-Infos", c, Math.max(10, Math.round((window.innerWidth - 380) / 2)), Math.max(60, Math.round(window.innerHeight / 2 - 200)), 380);
+        applyYourRatePulse(_yrPop);
+        promptIcon.addEventListener("click", function (e) {
+            e.preventDefault();
+            var ex = document.getElementById("cb_prompt_pop"); if (ex) { ex.remove(); return; }
+            var promptText = "Erstelle einen kurzen Unternehmensbeschreibungstext (ca. 3–4 Sätze, 50–80 Wörter) für ein Bewertungsportal.\n\n"
+                + "(Schreibe neutral, professionell und positiv. Erwähne die wichtigsten Leistungen und die besondere Stärke des Unternehmens. Vermeide Werbesprache, Superlative und zu lange Sätze.)\n\n"
+                + "Basis ist der folgende Inhalt (Startseitencontent):\n"
+                + (liveDomain ? ("https://" + liveDomain) : "[Live-Domain nicht gefunden – bitte manuell einfügen]");
+            var pc = document.createElement("div"); pc.style.cssText = "font-size:12px;text-transform:none;";
+            var ta = document.createElement("textarea"); ta.readOnly = true; ta.value = promptText;
+            ta.style.cssText = "width:100%;height:190px;resize:vertical;background:rgba(0,0,0,.25);color:inherit;border:1px solid rgba(255,255,255,.12);border-radius:4px;padding:8px;font-family:inherit;font-size:12px;box-sizing:border-box;";
+            var copyBtn = document.createElement("button"); copyBtn.type = "button"; copyBtn.className = "btn btn--primary"; copyBtn.textContent = "Prompt kopieren";
+            copyBtn.style.cssText = "margin-top:10px;";
+            copyBtn.addEventListener("click", function () {
+                var done = function () { copyBtn.textContent = "Kopiert \u2713"; setTimeout(function () { copyBtn.textContent = "Prompt kopieren"; }, 1500); };
+                if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(promptText).then(done, function () { ta.select(); document.execCommand("copy"); done(); }); }
+                else { ta.select(); document.execCommand("copy"); done(); }
+            });
+            pc.appendChild(ta); pc.appendChild(copyBtn);
+            // KI-Prompt-Popup immer leicht versetzt ueber dem aktuellen YourRate-Popup platzieren.
+        var _yr = document.getElementById("cb_yr_pop");
+        var _pw = 420;
+        var _px, _py;
+        if (_yr) {
+            var _r = _yr.getBoundingClientRect();
+            // leicht nach rechts und oben versetzt -> liegt sichtbar ueber dem Popup
+            _px = _r.left + 24;
+            _py = _r.top - 24;
+        } else {
+            _px = window.innerWidth - 470;
+            _py = 260;
+        }
+        // in den sichtbaren Bereich klemmen
+        _px = Math.max(10, Math.min(_px, window.innerWidth - _pw - 10));
+        _py = Math.max(10, _py);
+        makeDraggablePopup("cb_prompt_pop", "KI-Prompt (Beschreibungstext)", pc, _px, _py, _pw);
+        });
+    }
+
+    async function runZammad() {
+        var data = readPayload();
+        if (!data || !data.action_type) return;
+        try { await waitForElm('input[name="title"]', 20000); } catch (e) { return; }
+        await delay(400);
+
+        var kdnr = data.client_id || data.kundennummer || '';
+        var brand = resolveBrand(data);
+        var groups = GROUP_MAP[brand] || GROUP_MAP['Euroweb'];
+        var at = data.action_type;
+
+        if (at === 'domaintransfer' || at === 'yourrate' || at === 'dritttermin_vl') {
+            // INTERNAL -> phone-in, own email
+            switchTab('phone-in');
+            await delay(300);
+            await fillKundennummer(kdnr);
+            await fillCustomer(ownEmail(data));
+            if (at === 'domaintransfer') {
+                await setGroupById(groups.onlineschaltung);
+                await fillTitle(subjectDomaintransfer(kdnr, data.web_hunter));
+                await fillBody(TPL.domaintransfer_body(kdnr, data.web_hunter));
+            } else if (at === 'yourrate') {
+                await setGroupById(groups.yourrate);
+                await fillTitle(subjectYourRate(kdnr));
+                await fillBody(TPL.yourrate_body);
+                showYourRatePopups(data);
+            } else {
+                await setGroupById(groups.dritttermin);
+                await fillTitle(subjectVL(kdnr));
+                await fillBody(TPL.vl_body(data.client_name || '', kdnr, data.demo_link));
+            }
+            await setSelectByName('state_id', STATE.offen);
+            await setSelectByName('priority_id', 3);
+        } else {
+            // EXTERNAL customer mail -> email-out, Optionen-Popup (Anrede/Bloecke/Demo)
+            switchTab('email-out');
+            await delay(300);
+            var live = data.live_domain ? cleanDomain(data.live_domain) : "";
+            var demo = data.demo_link ? cleanDomain(data.demo_link) : "";
+            var hasDemo = !!demo;
+            var isAktuTicket = !!data.is_aktu;
+            var res = await askGender(data.client_name || '', hasDemo, isAktuTicket);
+            var anrede = res.anrede;
+            var template = res.template;
+            var blockOpts = res.opts || {};
+            await fillKundennummer(kdnr);
+            await fillCustomer(data.client_email || '');
+            await setGroupById(isAktuTicket ? groups.aktu : groups.web);
+            await delay(500); // Signatur/Grussformel rendern lassen
+            // Anrede-Name zusammensetzen (bei "Guten Tag" ohne Namen)
+            var nm = (data.client_name || '').trim();
+            var greet = anrede || 'Guten Tag';
+            var anredeName = (greet.indexOf('Guten Tag') < 0 && nm) ? (greet + ' ' + nm) : greet;
+            // Gruppen-Kontakt + Marken-Domain
+            var contact = brandContact(data);
+            var subject, body;
+            if (template === "aktu") {
+                subject = data.is_korrektur ? ztSubjectKorrektur(kdnr) : ztSubjectAktu(kdnr);
+                body = ztBodyAktu(anredeName, live);
+            } else if (template === "demo") {
+                subject = ztSubjectDemo(kdnr);
+                body = ztBodyDemo(anredeName, demo, contact.email, contact.domain);
+            } else {
+                subject = ztSubjectLive(kdnr);
+                body = ztBodyLive(anredeName, live, contact.domain, blockOpts);
+            }
+            await fillTitle(subject);
+            await fillBody(body);
+            await setSelectByName('state_id', STATE.closed_successful);
+            await setSelectByName('priority_id', 3);
+        }
+    }
+
+    /* ===== 10) DOKU WEB-HUNTER BRIDGE (runs inside doku archive tab) ===== */
+    function isDoku() { return location.hostname.indexOf('doku.') >= 0; }
+
+    function readWebHunter() {
+        var table = document.querySelector('table');
+        if (!table) return null;
+        var headers = Array.prototype.map.call(table.querySelectorAll('thead th, thead td'), function (h) { return h.textContent.trim(); });
+        var apptIdx = headers.findIndex(function (h) { return /appointment type/i.test(h); });
+        var hunterIdx = headers.findIndex(function (h) { return /web hunter/i.test(h); });
+        var subIdx = headers.findIndex(function (h) { return /submitted/i.test(h); });
+        if (apptIdx < 0 || hunterIdx < 0) return null;
+        function parseDate(s) {
+            var m = (s || '').match(/(\d{2})\/(\d{2})\/(\d{4}),\s*(\d{2}):(\d{2})\s*([ap])\.m\./i);
+            if (!m) { var m2 = (s || '').match(/(\d{2})[.\/-](\d{2})[.\/-](\d{4})/); return m2 ? new Date(+m2[3], +m2[2] - 1, +m2[1]).getTime() : 0; }
+            var h = parseInt(m[4], 10);
+            if (/p/i.test(m[6]) && h !== 12) h += 12;
+            if (/a/i.test(m[6]) && h === 12) h = 0;
+            return new Date(+m[3], +m[1] - 1, +m[2], h, +m[5]).getTime();
+        }
+        var wt = Array.prototype.map.call(table.querySelectorAll('tbody tr'), function (r) {
+            var c = r.querySelectorAll('td');
+            return { appt: (c[apptIdx] ? c[apptIdx].textContent.trim() : ''), hunter: (c[hunterIdx] ? c[hunterIdx].textContent.trim() : ''), submitted: (subIdx >= 0 && c[subIdx] ? c[subIdx].textContent.trim() : '') };
+        }).filter(function (x) { return /Ersterstellung\s+WT\s+pers\u00f6nlich/i.test(x.appt) && x.hunter; });
+        if (!wt.length) return null;
+        wt.sort(function (a, b) { return parseDate(b.submitted) - parseDate(a.submitted); });
+        return wt[0].hunter;
+    }
+
+    function dokuBridge() {
+    // Auf der DOKU-Seite: WT-Web-Hunter (Ersterstellung WT persoenlich) lesen,
+    // dann Zammad SELBST oeffnen (mit web_hunter im Payload) und DOKU-Tab schliessen.
+    // So wird pro Klick nur EIN Popup benoetigt (kein Popup-Blocker).
+    function openZammadWith(hunter) {
+        var payload = null;
+        // 1) bevorzugt: frueh gesicherter Payload aus sessionStorage (DOKU-Origin)
+        try {
+            var stored = sessionStorage.getItem("wwwe_dt_cb");
+            if (stored) payload = JSON.parse(decodeURIComponent(stored));
+        } catch (e) { payload = null; }
+        // 2) Fallback: noch aus der URL lesen (falls SPA sie nicht ueberschrieben hat)
+        if (!payload) {
+            try {
+                var src = (location.hash || "") + (location.search || "");
+                var i = src.indexOf("cb=");
+                if (i >= 0) {
+                    var raw = src.slice(i + 3).split("&")[0].split("#")[0];
+                    payload = JSON.parse(decodeURIComponent(raw));
+                }
+            } catch (e) { payload = null; }
+        }
+        if (!payload) return false;
+        if (hunter) payload.web_hunter = hunter;
+        payload.action_type = "domaintransfer";
+        // Payload nicht mehr benoetigt -> aufraeumen
+        try { sessionStorage.removeItem("wwwe_dt_cb"); } catch (e) {}
+        var url = "https://tickets.wwwe.systems" + "/#ticket/create/id/87679" + "#" + "cb" + "=" + encodeURIComponent(JSON.stringify(payload));
+        location.href = url;
+        return true;
+    }
+    var tries = 0;
+    var poll = setInterval(function () {
+        tries++;
+        var hunter = null;
+        try { hunter = readWebHunter(); } catch (e) {}
+        if (hunter) {
+            clearInterval(poll);
+            openZammadWith(hunter);
+        } else if (tries > 60) {
+            clearInterval(poll);
+            openZammadWith(null);
+        }
+    }, 500);
+    }
+
+    /* ===== 11) BOOT ===== */
+    function boot() {
+        if (isDoku()) { var _hasCb = false; try { _hasCb = !!sessionStorage.getItem("wwwe_dt_cb"); } catch (e) {} if (window.name === "wwwe_dt_bridge" || (location.hash + location.search).indexOf("wwwe_dt") !== -1 || _hasCb) { dokuBridge(); } return; }
+        if (readPayload()) { runZammad().catch(function (e) { console.warn('Zammad-Extension:', e); }); }
+    }
+    // Web-Hunter-Relay von der IPSI-Seite (Domaintransfer): Betreff nachtragen.
+    window.addEventListener("message", function (ev) {
+        var d = ev && ev.data;
+        if (!d || d.type !== "WWWE_SET_HUNTER" || !d.hunter) return;
+        var el = pickVisible('input[name="title"]');
+        if (!el) return;
+        var v = el.value || "";
+        if (v.indexOf("Domaintransfer") < 0) return;
+        var idx = v.indexOf("|");
+        var base = idx >= 0 ? v.slice(0, idx + 1) : (v.replace(/\s*$/, "") + " |");
+        setNativeValue(el, base + " " + String(d.hunter).trim());
+    });
+    window.addEventListener('hashchange', function () {
+        if (!isDoku() && readPayload()) { runZammad().catch(function (e) { console.warn('Zammad-Extension:', e); }); }
+    });
+    if (document.readyState === 'complete' || document.readyState === 'interactive') { setTimeout(boot, 600); }
+    else { window.addEventListener('DOMContentLoaded', function () { setTimeout(boot, 600); }); }
+})();

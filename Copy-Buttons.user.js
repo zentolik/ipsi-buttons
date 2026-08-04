@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Copy-Buttons
 // @namespace    https://github.com/zentolik
-// @version      1.00
+// @version      1.01
 // @description  doing stuff ʕ·͡ᴥ·ʔ
 // @author       Zentolik
 // @match        https://ipsi.securewebsystems.net/project/detailed/*
@@ -13,7 +13,7 @@
 
 !(function() { // ʕ·͡ᴥ·ʔ hi & ty <3
     'use strict';
-    const SCRIPT_VERSION = '1.00';
+    const SCRIPT_VERSION = '1.01';
     console.log(`ʕ·͡ᴥ·ʔ *bup* v${SCRIPT_VERSION}`);
     let settings = {
         button_position: true, // ändert die position vom btn (wenn auf "false", empfähle ich "copy_icon" zu aktivieren") //
@@ -31,7 +31,23 @@
         user: '',
         user_email: '',
         ls_sort: 'project_id', // Sortierkriterium der Projekt-Auflistung: 'project_id' oder 'client_id' (wird auch als führender Wert im Label angezeigt)
+        ps_labels: true, // zeigt in der Meilensteine-Übersicht die PS-/Zeit-Labels an //
+        orga_icons: { // Icons für die Status der Orga-Projektnotiz (leer = kein Icon) – einstellbar über das Zahnrad im Orga-Modal //
+            open: '📁',
+            progress: '⚙️',
+            done: '✅',
+            canceled: '❌',
+            delayed: '🕒',
+        },
+  orga_line_mode: 'br', // Zeilentrennung in der Orga-Notiz: 'br' (Standard) oder 'p' (jede Zeile ein Absatz) – einstellbar über das Zahnrad im Orga-Modal //
     };
+
+    const saveSettings = (newSettings) => { // Settings speichern – auch außerhalb des Settings-Popups nutzbar //
+        settings = { ...settings, ...newSettings };
+        localStorage.setItem('settings', JSON.stringify(settings));
+    };
+
+    let refreshPsLabels = () => {}; // wird von "setupPsLabels" gesetzt, damit das Setting sofort greift //
 
     const selectors = { // Attribute, zum selektieren der Container
         server_attr: ['data-v-7fcb082d','data-v-8744275e'], // selector zum edo-btn
@@ -1562,6 +1578,14 @@
                 </div>
 
                 <div class="cb_setting">
+                    <input type="checkbox" id="ps_labels" name="ps-labels"/>
+                    <label class="cb_switch" for="ps_labels">
+                        <span class="setting_title">PS-Labels <span class="glyphicon glyphicon-info-sign cb_info-sign" title="Rechnet die PS-Angaben in der Meilensteine-Übersicht in Std./Min. um und zeigt sie als Label hinter der PS-Angabe an (inkl. Vergleich mit der Arbeitszeit).&#013;Deaktiviert werden die Labels wieder von der Seite entfernt."></span></span>
+                        <span class="box"></span>
+                    </label>
+                </div>
+
+                <div class="cb_setting">
                     <label class="cb_switch" for="cb_default_email_client">
                         <span class="setting_title always_active">E-Mail Client <span class="glyphicon glyphicon-info-sign cb_info-sign" title="Gib an, ob das veschicken von E-Mail über die Outlook-App oder den Browser laufen soll."></span></span>
                         <select id="cb_default_email_client" class="box" name="cb_default_email_client">
@@ -1907,6 +1931,7 @@
             localStorage.setItem('settings', JSON.stringify(settings));
 
             updateCopyButton();
+            refreshPsLabels(); // PS-Labels sofort ein-/ausblenden
         }
 
         function updateCopyButton() {
@@ -2253,6 +2278,7 @@
         document.querySelector('#delete_button').checked = settings.delete_button;
         document.querySelector('#vsc_open').checked = settings.vsc_open;
         document.querySelector('#sandbox_check').checked = settings.sandbox_check;
+        document.querySelector('#ps_labels').checked = settings.ps_labels !== false;
 
         const popupColor = document.querySelector('.color_btn.popup_btn');
         popupColor.className = 'color_btn popup_btn';
@@ -2804,7 +2830,12 @@
             return { perSegment, perUserSegment, total, totalP };
         };
 
+        const removePsLabels = () => { // alle erzeugten Labels/PS-Werte wieder von der Seite nehmen
+            document.querySelectorAll('.cb_ps_label, .cb_special_ps_value').forEach(el => el.remove());
+        };
+
         const applyPsLabels = () => {
+            if (settings.ps_labels === false) return removePsLabels(); // Labels per Setting deaktiviert
             const table = findPanelByTitle('Meilensteine')?.querySelector('table');
             if (!table) return;
             const work = collectWorkTimes();
@@ -2981,6 +3012,7 @@
             startSpecialPsEdit(target);
         });
 
+        refreshPsLabels = applyPsLabels; // damit das Setting "PS-Labels" sofort greift
         applyPsLabels();
         const psObserver = new MutationObserver(() => applyPsLabels()); // beide Panels laden verzögert und werden von der Seite neu gerendert (Status ändern, Zeit buchen, sortieren …)
         psObserver.observe(document.body, { childList: true, subtree: true });
@@ -2993,17 +3025,54 @@
         const ORGA_BTN_ID = 'manage-project-note-orga-trigger';
         const ORGA_EDIT_BTN_ID = 'manage-project-note-orga-edit';
 
+        // ── Status & Icons (Icons sind über das Zahnrad im Orga-Modal einstellbar) ──
+        const ORGA_ICON_DEFAULTS = { open: '📁', progress: '⚙️', done: '✅', canceled: '❌', delayed: '🕒' };
+        const ORGA_STATUS_LABELS = { open: 'offen', progress: 'i.B.', done: 'done', canceled: 'abgebrochen', delayed: 'verzögert' };
+        const ORGA_STATUS_KEYS = ['open', 'progress', 'done', 'canceled', 'delayed'];
+
+        const getOrgaIcons = () => ({ ...ORGA_ICON_DEFAULTS, ...(settings.orga_icons || {}) }); // fehlende Keys → Standard-Icon
+
+        const getOrgaLineMode = () => (settings.orga_line_mode === 'p' ? 'p' : 'br'); // 'br' = Umbruch per <br>, 'p' = jede Zeile ein Absatz
+
+        const orgaStatusText = (key) => { // "✅ done" bzw. nur "done", wenn kein Icon hinterlegt ist
+            const icon = String(getOrgaIcons()[key] ?? '').trim();
+            const label = ORGA_STATUS_LABELS[key] || '';
+            return icon ? `${icon} ${label}` : label;
+        };
+
+        const statusFromText = (str) => { // Status aus dem Notiz-Text lesen – unabhängig vom (eigenen) Icon
+            const clean = String(str || '').replace(/\s+/g, ' ').trim();
+            if (!clean) return 'open';
+            const icons = getOrgaIcons();
+            for (const key of ORGA_STATUS_KEYS) { // zuerst über die eingestellten Icons
+                const icon = String(icons[key] ?? '').trim();
+                if (icon && clean.startsWith(icon)) return key;
+            }
+            for (const key of ORGA_STATUS_KEYS) { // dann über die Standard-Icons (ältere Notizen)
+                if (clean.startsWith(ORGA_ICON_DEFAULTS[key])) return key;
+            }
+            const word = clean.replace(/^[^\p{L}\d]+/u, '').toLowerCase(); // führende Emojis/Symbole abschneiden
+            if (word.startsWith('verzögert') || word.startsWith('verzoegert')) return 'delayed';
+            if (word.startsWith('done') || word.startsWith('erledigt') || word.startsWith('fertig')) return 'done';
+            if (word.startsWith('i.b') || word.startsWith('in bearbeitung')) return 'progress';
+            if (word.startsWith('abgebrochen')) return 'canceled';
+            return 'open';
+        };
+
+        const escapeHtml = (str) => String(str)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
         const DEFAULT_ROWS = [
-            { label: 'Layout', dates: [''], status: '📁 offen', delay: '' },
-            { label: 'Erstellung', dates: [''], status: '📁 offen', delay: '' },
-            { label: 'Befüllung', dates: [''], status: '📁 offen', delay: '' },
-            { label: 'FS', dates: [''], status: '📁 offen', delay: '' },
+            { label: 'Layout',     dates: [''], status: 'open', delay: '' },
+            { label: 'Erstellung', dates: [''], status: 'open', delay: '' },
+            { label: 'Befüllung',  dates: [''], status: 'open', delay: '' },
+            { label: 'FS',         dates: [''], status: 'open', delay: '' },
         ];
 
         const ZT_ROWS = [
-            { label: 'ZT-Änderungen', dates: [''], status: '📁 offen', delay: '' },
-            { label: 'OS', dates: [''], status: '📁 offen', delay: '' },
-            { label: 'FS', dates: [''], status: '📁 offen', delay: '' },
+            { label: 'ZT-Änderungen', dates: [''], status: 'open', delay: '' },
+            { label: 'OS',            dates: [''], status: 'open', delay: '' },
+            { label: 'FS',            dates: [''], status: 'open', delay: '' },
         ];
 
         // ── CSS ────────────────────────────────────────────────────────────
@@ -3042,15 +3111,21 @@
                 user-select: none;
             }
             #${ORGA_MODAL_ID} .orga-label-input {
-                field-sizing: content;
+                display: inline-block;
                 min-width: 95px;
-                font-weight: bold;
+                min-height: 24px;
+                font-weight: 500;
+                white-space: pre-wrap;
+                word-break: break-word;
                 border: 1px solid transparent;
                 border-radius: 3px;
                 padding: 2px 4px;
-                background-color:
-                transparent;
-                cursor: pointer;
+                background-color: transparent;
+                cursor: text;
+            }
+            #${ORGA_MODAL_ID} .orga-label-input:empty::before {
+                content: attr(data-placeholder);
+                opacity: .45;
             }
             #${ORGA_MODAL_ID} .orga-label-input:focus,
             #${ORGA_MODAL_ID} .orga-label-input:hover {
@@ -3235,6 +3310,150 @@
             .cb_orga_darkmode #${ORGA_MODAL_ID} .close {
                 color: #eaedf7;
             }
+            /* ── Kopfzeile mit Zahnrad ── */
+            #${ORGA_MODAL_ID} .modal-header {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            }
+            #${ORGA_MODAL_ID} .modal-header .modal-title {
+                order: 1;
+                flex: 1;
+            }
+            #${ORGA_MODAL_ID} .modal-header .orga-settings-btn {
+                order: 3;
+                cursor: pointer;
+                opacity: .55;
+                font-size: 15px;
+                transition: opacity .2s ease, transform .35s ease;
+            }
+            #${ORGA_MODAL_ID} .modal-header .orga-settings-btn:hover { opacity: 1; }
+            #${ORGA_MODAL_ID} .modal-header .orga-settings-btn.open { opacity: 1; transform: rotate(90deg); }
+            #${ORGA_MODAL_ID} .modal-header .close {
+                order: 4;
+                float: none;
+                margin: 0;
+            }
+            /* ── Icon-Einstellungen ── */
+            #${ORGA_MODAL_ID} .orga-icon-settings {
+                display: none;
+                margin-bottom: 12px;
+                padding: 8px 10px;
+                border: 1px solid rgba(0,0,0,0.1);
+                border-radius: 4px;
+                background-color: #fafafa;
+            }
+            #${ORGA_MODAL_ID} .orga-icon-settings.open { display: block; }
+            #${ORGA_MODAL_ID} .orga-icon-settings .orga-icon-settings-title {
+                font-weight: bold;
+                margin-bottom: 6px;
+            }
+            #${ORGA_MODAL_ID} .orga-icon-settings .orga-icon-row {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                margin-bottom: 4px;
+            }
+            #${ORGA_MODAL_ID} .orga-icon-settings .orga-icon-row label {
+                min-width: 110px;
+                margin-bottom: 0;
+                font-weight: normal;
+            }
+            #${ORGA_MODAL_ID} .orga-icon-settings .orga-icon-input {
+                width: 75px;
+                text-align: center;
+                border: 1px solid #ccc;
+                border-radius: 3px;
+                padding: 2px 4px;
+                background-color: #fff;
+            }
+            #${ORGA_MODAL_ID} .orga-icon-settings .orga-line-mode-select {
+              height: 26px;
+              border: 1px solid #ccc;
+              border-radius: 3px;
+              padding: 1px 4px;
+              background-color: #fff;
+            }
+            #${ORGA_MODAL_ID} .orga-icon-settings .orga-settings-sub {
+              margin-top: 10px;
+              padding-top: 8px;
+              border-top: 1px solid rgba(0,0,0,0.08);
+            }
+            #${ORGA_MODAL_ID} .orga-icon-settings .orga-icon-hint {
+                font-size: 11px;
+                opacity: .6;
+                margin: 6px 0;
+            }
+            /* ── Freie Textzeilen ── */
+            #${ORGA_MODAL_ID} .orga-text-row .orga-text-input {
+                flex: 1;
+                min-width: 280px;
+                min-height: 24px;
+                border: 1px solid transparent;
+                border-radius: 3px;
+                padding: 2px 4px;
+                background-color: transparent;
+                cursor: text;
+                white-space: pre-wrap;
+                word-break: break-word;
+            }
+            #${ORGA_MODAL_ID} .orga-text-row .orga-text-input:focus,
+            #${ORGA_MODAL_ID} .orga-text-row .orga-text-input:hover {
+                border-color: #337ab7;
+                background-color: #fff;
+                outline: none;
+            }
+            #${ORGA_MODAL_ID} .orga-text-row .orga-text-input:empty::before {
+                content: attr(data-placeholder);
+                opacity: .45;
+            }
+            /* ── Formatier-Leiste in der Kopfzeile ── */
+            #${ORGA_MODAL_ID} .modal-header .orga-format-btn {
+                order: 2;
+                width: 26px;
+                height: 24px;
+                padding: 0;
+                border: 1px solid rgba(0,0,0,0.15);
+                border-radius: 3px;
+                background-color: transparent;
+                color: inherit;
+                opacity: .65;
+                font-size: 13px;
+                line-height: 1;
+                cursor: pointer;
+                transition: opacity .2s ease, background-color .2s ease;
+            }
+            #${ORGA_MODAL_ID} .modal-header .orga-format-btn:hover {
+                opacity: 1;
+                background-color: rgba(0,0,0,0.06);
+            }
+            #${ORGA_MODAL_ID} .modal-header .orga-format-btn.orga-btn-bold { font-weight: bold; }
+            #${ORGA_MODAL_ID} .modal-header .orga-format-btn.orga-btn-italic { font-style: italic; font-family: serif; }
+            .cb_orga_darkmode #${ORGA_MODAL_ID} .modal-header .orga-format-btn {
+                border-color: #555;
+            }
+            .cb_orga_darkmode #${ORGA_MODAL_ID} .modal-header .orga-format-btn:hover {
+                background-color: #2e2e2e;
+            }
+            #${ORGA_MODAL_ID} .orga-btn-text {
+                flex-shrink: 0;
+                border: none;
+                padding: 1px 7px;
+                cursor: pointer;
+                font-size: 12px;
+                line-height: 1.5;
+            }
+            .cb_orga_darkmode #${ORGA_MODAL_ID} .orga-icon-settings {
+                background-color: #2e2e2e;
+                border-color: #444;
+            }
+            .cb_orga_darkmode #${ORGA_MODAL_ID} .orga-icon-settings .orga-icon-input,
+            .cb_orga_darkmode #${ORGA_MODAL_ID} .orga-icon-settings .orga-line-mode-select,
+            .cb_orga_darkmode #${ORGA_MODAL_ID} .orga-text-row .orga-text-input {
+                color: #eaedf7;
+                background-color: transparent;
+                border-color: #555;
+            }
         `;
         document.head.appendChild(orgaStyle);
 
@@ -3251,58 +3470,99 @@
             return `${y}-${m}-${d}`;
         }
 
-        function buildRowText(row) {
-            const label = row.querySelector('.orga-label-input').value.trim() || 'CUSTOM';
+        function buildRowText(row) { // liefert fertiges HTML für eine Orga-Zeile
+            const labelEl = row.querySelector('.orga-label-input');
+            const label = sanitizeInlineHtml(labelEl?.innerHTML || '') || 'CUSTOM'; // Formatierung der Bezeichnung bleibt erhalten
             const dates = [...row.querySelectorAll('.orga-dates-container .orga-date-input')]
                                .map(i => formatDate(i.value));
             const sel = row.querySelector('.orga-status-select');
-            let status = sel.value;
-            if (status === '🕒 verzögert') {
-                const delay = (row.querySelector('.orga-delay-input')?.value || '').trim() || 'XY';
-                status = `🕒 verzögert durch ${delay}`;
+            let status = orgaStatusText(sel.value); // Icon kommt aus den Settings (leer = kein Icon)
+            if (sel.value === 'delayed') {
+                const delay = escapeHtml((row.querySelector('.orga-delay-input')?.value || '').trim() || 'XY');
+                status = `${status} durch ${delay}`.trim();
             }
             return [label, ...dates, status].join(' » ');
         }
 
         // ── Orga-Notizen parsen & finden ───────────────────────────────────
-        function parseOrgaLines(html) {
-            const text = html
-                .replace(/<br\s*\/?>/gi, '\n')
-                .replace(/&nbsp;/g, ' ')
-                .replace(/<[^>]+>/g, '');
-            const lines = text.split('\n').map(l => l.trim()).filter(l => l.includes(' » '));
+        function htmlToText(html) { // HTML-Schnipsel → reiner Text
+            const div = document.createElement('div');
+            div.innerHTML = html;
+            return (div.textContent || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+        }
 
-            return lines.map(line => {
-                const parts = line.split(' » ').map(s => s.trim());
-                if (parts.length < 2) return null;
+        function cleanHtml(html) { // vom Browser normalisieren lassen (offene Tags reparieren)
+            const div = document.createElement('div');
+            div.innerHTML = html;
+            return div.innerHTML.trim();
+        }
 
-                const label = parts[0];
-                const dateRegex = /^\d{2}\.\d{2}\.\d{4}$/;
-                const dates = [];
-                let statusStr = '';
+        function fillStatusSelect(select, selectedKey) { // Status-Optionen mit den aktuellen Icons aufbauen
+            const current = selectedKey ?? select.value;
+            select.innerHTML = '';
+            ORGA_STATUS_KEYS.forEach(key => {
+                const opt = document.createElement('option');
+                opt.value = key;
+                opt.textContent = key === 'delayed' ? `${orgaStatusText(key)} durch...` : orgaStatusText(key);
+                if (key === current) opt.selected = true;
+                select.appendChild(opt);
+            });
+        }
 
-                for (let i = 1; i < parts.length; i++) {
-                    if (dateRegex.test(parts[i])) {
-                        dates.push(isoFromDisplay(parts[i]));
-                    } else {
-                        statusStr = parts.slice(i).join(' » ');
-                        break;
-                    }
+        function refreshStatusSelects(scope) { // nach einer Icon-Änderung alle Selects neu beschriften
+            (scope || document).querySelectorAll('.orga-status-select').forEach(sel => fillStatusSelect(sel, sel.value));
+        }
+
+        function parseOrgaLine(line, lineHtml) { // "Label » 01.01.2026 » ✅ done" → Objekt (Label darf HTML enthalten)
+            const parts = line.split(' » ').map(s => s.trim());
+            if (parts.length < 2) return null;
+
+            const label = parts[0];
+            const dateRegex = /^\d{2}\.\d{2}\.\d{4}$/;
+            const dates = [];
+            let statusStr = '';
+
+            for (let i = 1; i < parts.length; i++) {
+                if (dateRegex.test(parts[i])) {
+                    dates.push(isoFromDisplay(parts[i]));
+                } else {
+                    statusStr = parts.slice(i).join(' » ');
+                    break;
                 }
-                if (!dates.length) dates.push('');
+            }
+            if (!dates.length) dates.push('');
 
-                let status = '📁 offen', delay = '';
-                if (statusStr.startsWith('🕒')) {
-                    status = '🕒 verzögert';
-                    const m = statusStr.match(/verzögert durch (.+)/);
-                    delay = m ? m[1].trim() : '';
-                } else if (statusStr.startsWith('✅')) { status = '✅ done'; }
-                else if (statusStr.startsWith('⚙️')) { status = '⚙️ i.B.'; }
-                else if (statusStr.startsWith('❌')) { status = '❌ abgebrochen'; }
-                // else: 📁 offen (default)
+            const status = statusFromText(statusStr);
+            let delay = '';
+            if (status === 'delayed') {
+                const m = statusStr.match(/durch\s+(.+)$/i);
+                delay = m ? m[1].trim() : '';
+            }
 
-                return { label, dates, status, delay };
-            }).filter(Boolean);
+            const labelHtml = lineHtml ? sanitizeInlineHtml(String(lineHtml).split(' » ')[0]) : escapeHtml(label); // Formatierung der Bezeichnung mitnehmen
+            return { type: 'orga', label, labelHtml, dates, status, delay };
+        }
+
+        // Kompletten Notiz-Inhalt lesen: Orga-Zeilen UND manuell ergänzte Textzeilen
+        function parseNoteContent(html) {
+            const rawLines = String(html)
+                .replace(/<br\s*\/?>/gi, '\n')
+                .replace(/<\/(div|p|li|h[1-6]|tr)>/gi, '\n')
+                .replace(/<(div|p|li|h[1-6]|tr)[^>]*>/gi, '')
+                .split('\n');
+
+            const items = [];
+            rawLines.forEach(raw => {
+                const lineHtml = cleanHtml(raw); // normalisiertes HTML der Zeile (Entities aufgelöst)
+                const text = htmlToText(lineHtml);
+                if (!text) return; // leere Zeilen überspringen
+                if (text.includes(' » ')) {
+                    const parsed = parseOrgaLine(text, lineHtml);
+                    if (parsed) { items.push(parsed); return; }
+                }
+                items.push({ type: 'text', text, html: lineHtml }); // frei geschriebener Text
+            });
+            return items;
         }
 
         function findOrgaNotes() {
@@ -3320,8 +3580,8 @@
                     );
                     if (!editLink) return;
 
-                    const parsedLines = parseOrgaLines(contentHtml);
-                    if (!parsedLines.length) return;
+                    const parsedLines = parseNoteContent(contentHtml); // Orga-Zeilen + freier Text
+                    if (!parsedLines.some(item => item.type === 'orga')) return;
 
                     results.push({
                         noteId: editLink.id,
@@ -3332,6 +3592,43 @@
                 });
             });
             return results;
+        }
+
+        // ── Rich-Text-Felder (fett/kursiv über die Leiste in der Kopfzeile) ──
+        let activeRichField = null; // zuletzt fokussiertes Textfeld – darauf wirkt die Formatier-Leiste
+
+        function createRichField(className, html, placeholder, title) {
+            const field = document.createElement('div');
+            field.className = className;
+            field.contentEditable = 'true';
+            field.setAttribute('data-placeholder', placeholder);
+            field.title = title;
+            field.innerHTML = sanitizeInlineHtml(html || '');
+
+            try { document.execCommand('styleWithCSS', false, false); } catch (_) {} // <b>/<i> statt style-Attributen
+
+            field.addEventListener('keydown', e => { // eine Zeile pro Feld – kein Umbruch
+                e.stopPropagation();
+                if (e.key === 'Enter') e.preventDefault();
+            });
+            field.addEventListener('paste', e => { // immer als reinen Text einfügen
+                e.preventDefault();
+                const text = (e.clipboardData || window.clipboardData)?.getData('text/plain') || '';
+                document.execCommand('insertText', false, text.replace(/\s+/g, ' '));
+            });
+            field.addEventListener('focus', () => { activeRichField = field; });
+
+            const row = () => field.closest('.orga-row');
+            field.addEventListener('mousedown', () => { const r = row(); if (r) r.draggable = false; }); // sonst blockt Drag&Drop das Markieren
+            field.addEventListener('blur', () => { const r = row(); if (r) r.draggable = true; });
+
+            return field;
+        }
+
+        function applyRichFormat(cmd) { // wird von der Formatier-Leiste aufgerufen
+            if (!activeRichField || !activeRichField.isConnected) return;
+            activeRichField.focus();
+            document.execCommand(cmd, false, null);
         }
 
         // ── Drag-and-Drop ──────────────────────────────────────────────────
@@ -3401,11 +3698,13 @@
             row.className = 'orga-row';
 
             const label = data.label ?? 'CUSTOM';
+            const labelHtml = data.labelHtml || escapeHtml(label); // Bezeichnung darf fett/kursiv enthalten
             // support both old `date: ''` and new `dates: []`
             const dates = data.dates ?? (data.date !== undefined ? [data.date] : ['']);
-            const status = data.status ?? '📁 offen';
+            const rawStatus = data.status ?? 'open';
+            const status = ORGA_STATUS_KEYS.includes(rawStatus) ? rawStatus : statusFromText(rawStatus); // alte Werte mit Icon-Text abfangen
             const delay = data.delay ?? '';
-            const isDelay = status === '🕒 verzögert' || status.startsWith('🕒');
+            const isDelay = status === 'delayed';
 
             // ── Datum-Container mit ein oder mehreren Slots ────────────────
             const datesContainer = document.createElement('span');
@@ -3525,19 +3824,7 @@
             // ── Status-Select ──────────────────────────────────────────────
             const statusSelect = document.createElement('select');
             statusSelect.className = 'orga-status-select';
-            [
-                ['📁 offen', '📁 offen'],
-                ['⚙️ i.B.', '⚙️ i.B.'],
-                ['✅ done', '✅ done'],
-                ['❌ abgebrochen', '❌ abgebrochen'],
-                ['🕒 verzögert', '🕒 verzögert durch...'],
-            ].forEach(([val, txt]) => {
-                const opt = document.createElement('option');
-                opt.value = val;
-                opt.textContent = txt;
-                if (isDelay ? val === '🕒 verzögert' : val === status) opt.selected = true;
-                statusSelect.appendChild(opt);
-            });
+            fillStatusSelect(statusSelect, status); // Optionen mit den aktuell eingestellten Icons
 
             // ── Delay-Input ────────────────────────────────────────────────
             const delayInput = document.createElement('input');
@@ -3548,7 +3835,7 @@
             delayInput.style.display = isDelay ? 'inline-block' : 'none';
 
             statusSelect.addEventListener('change', () => {
-                delayInput.style.display = statusSelect.value === '🕒 verzögert' ? 'inline-block' : 'none';
+                delayInput.style.display = statusSelect.value === 'delayed' ? 'inline-block' : 'none';
             });
 
             // ── Zeilen-Buttons ─────────────────────────────────────────────
@@ -3570,11 +3857,7 @@
             handle.textContent = '⠿';
             handle.title = 'Verschieben';
 
-            const labelInput = document.createElement('input');
-            labelInput.type = 'text';
-            labelInput.className = 'orga-label-input';
-            labelInput.value = label;
-            labelInput.title = 'Bezeichnung bearbeiten';
+            const labelInput = createRichField('orga-label-input', labelHtml, 'Bezeichnung', 'Bezeichnung bearbeiten (Strg+B = fett, Strg+I = kursiv)');
 
             const sep1 = document.createElement('span');
             sep1.className = 'orga-sep';
@@ -3584,9 +3867,160 @@
             sep2.className = 'orga-sep';
             sep2.textContent = '»';
 
-            row.append(handle, labelInput, sep1, datesContainer, sep2, statusSelect, delayInput, addBtn, remBtn);
+            const addTextBtn = document.createElement('button');
+            addTextBtn.className = 'orga-btn-text btn btn-default';
+            addTextBtn.textContent = 'T';
+            addTextBtn.title = 'Freie Textzeile darunter einfügen';
+            addTextBtn.addEventListener('click', () => row.after(createTextRow(container)));
+
+            row.dataset.type = 'orga';
+            row.append(handle, labelInput, sep1, datesContainer, sep2, statusSelect, delayInput, addBtn, addTextBtn, remBtn);
             setupDrag(row);
             return row;
+        }
+
+        // ── Freie Textzeile (manuell in der Notiz ergänzter Text) ──────────
+        const INLINE_TAGS = { B: 'b', STRONG: 'strong', I: 'i', EM: 'em', U: 'u' }; // erlaubte Formatierungen
+
+        function sanitizeInlineHtml(html) { // nur fett/kursiv/unterstrichen behalten, alles andere wird zu reinem Text
+            const source = document.createElement('div');
+            source.innerHTML = String(html || '');
+
+            const walk = (node) => {
+                const frag = document.createDocumentFragment();
+                node.childNodes.forEach(child => {
+                    if (child.nodeType === Node.TEXT_NODE) { frag.appendChild(document.createTextNode(child.nodeValue)); return; }
+                    if (child.nodeType !== Node.ELEMENT_NODE) return;
+                    if (child.tagName === 'BR') { frag.appendChild(document.createTextNode(' ')); return; }
+                    const style = child.getAttribute('style') || '';
+                    let tag = INLINE_TAGS[child.tagName];
+                    if (!tag && /font-weight:\s*(bold|[6-9]00)/i.test(style)) tag = 'strong'; // execCommand mit CSS-Styles abfangen
+                    if (!tag && /font-style:\s*italic/i.test(style)) tag = 'em';
+                    const inner = walk(child);
+                    if (tag) {
+                        const el = document.createElement(tag);
+                        el.appendChild(inner);
+                        frag.appendChild(el);
+                    } else {
+                        frag.appendChild(inner);
+                    }
+                });
+                return frag;
+            };
+
+            const out = document.createElement('div');
+            out.appendChild(walk(source));
+            return out.innerHTML.replace(/\u00a0/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+        }
+
+        function createTextRow(container, data = {}) {
+            const row = document.createElement('div');
+            row.className = 'orga-row orga-text-row';
+            row.dataset.type = 'text';
+
+            const handle = document.createElement('span');
+            handle.className = 'orga-drag-handle';
+            handle.textContent = '⠿';
+            handle.title = 'Verschieben';
+
+            const editable = createRichField('orga-text-input', data.html || escapeHtml(data.text || ''), 'Freier Text …', 'Freie Textzeile bearbeiten (Strg+B = fett, Strg+I = kursiv)');
+            handle.addEventListener('mousedown', () => { row.draggable = true; });
+
+            const addBtn = document.createElement('button');
+            addBtn.className = 'orga-btn-add btn btn-success';
+            addBtn.textContent = '+';
+            addBtn.title = 'Orga-Zeile darunter einfügen';
+            addBtn.addEventListener('click', () => row.after(createRow(container)));
+
+            const addTextBtn = document.createElement('button');
+            addTextBtn.className = 'orga-btn-text btn btn-default';
+            addTextBtn.textContent = 'T';
+            addTextBtn.title = 'Freie Textzeile darunter einfügen';
+            addTextBtn.addEventListener('click', () => row.after(createTextRow(container)));
+
+            const remBtn = document.createElement('button');
+            remBtn.className = 'orga-btn-rem btn btn-danger';
+            remBtn.textContent = '−';
+            remBtn.title = 'Zeile entfernen';
+            remBtn.addEventListener('click', () => row.remove());
+
+            row.append(handle, editable, addBtn, addTextBtn, remBtn);
+            setupDrag(row);
+            return row;
+        }
+
+        function createAnyRow(container, data = {}) { // Orga- oder Textzeile, je nach Typ
+            return data.type === 'text' ? createTextRow(container, data) : createRow(container, data);
+        }
+
+        function buildTextRowHtml(row) { // Formatierungen (fett/kursiv) bleiben erhalten
+            const editable = row.querySelector('.orga-text-input');
+            if (!editable) return null;
+            if (!(editable.textContent || '').trim()) return null; // leere Textzeilen werden verworfen
+            return sanitizeInlineHtml(editable.innerHTML);
+        }
+
+        // ── Icon-Einstellungen der Projektnotiz (Zahnrad im Orga-Modal) ────
+        function buildIconSettings(modal) {
+            const panel = modal.querySelector('#orga-icon-settings');
+            const gear = modal.querySelector('#orga-settings-btn');
+            if (!panel || !gear) return;
+
+            const icons = getOrgaIcons();
+            const rowsHtml = ORGA_STATUS_KEYS.map(key => `
+                <div class="orga-icon-row">
+                    <label for="orga-icon-${key}">${ORGA_STATUS_LABELS[key]}</label>
+                    <input type="text" class="orga-icon-input" id="orga-icon-${key}" data-key="${key}" value="${escapeHtml(icons[key] ?? '')}" placeholder="kein Icon" />
+                </div>`).join('');
+
+            panel.innerHTML = `
+                <div class="orga-icon-settings-title">Icons der Projektnotiz</div>
+                ${rowsHtml}
+                <div class="orga-icon-hint">Leer lassen = kein Icon. Die Icons werden beim Speichern der Notiz verwendet.</div>
+                <button type="button" class="btn btn-default btn-xs" id="orga-icon-reset">Standard-Icons</button>
+                <div class="orga-icon-settings-title orga-settings-sub">Zeilenabstände der Notiz</div>
+                <div class="orga-icon-row">
+                  <label for="orga-line-mode">Zeilenumbruch</label>
+                  <select class="orga-line-mode-select" id="orga-line-mode">
+                    <option value="br">&lt;br&gt; (Standard)</option>
+                    <option value="p">&lt;p&gt; pro Zeile</option>
+                  </select>
+                </div>
+                <div class="orga-icon-hint">Legt fest, wie die Zeilen beim Speichern in die Notiz geschrieben werden.</div>
+            `;
+
+            const saveIcons = () => { // Icons direkt in den Settings (localStorage) ablegen
+                const next = {};
+                panel.querySelectorAll('.orga-icon-input').forEach(input => {
+                    next[input.dataset.key] = input.value.trim();
+                });
+                saveSettings({ orga_icons: next });
+                refreshStatusSelects(modal); // Auswahl-Listen sofort neu beschriften
+            };
+
+            panel.querySelectorAll('.orga-icon-input').forEach(input => {
+                input.addEventListener('input', saveIcons);
+                input.addEventListener('change', saveIcons);
+            });
+
+            const lineModeSelect = panel.querySelector('#orga-line-mode'); // Art der Zeilentrennung
+            lineModeSelect.value = getOrgaLineMode();
+            lineModeSelect.addEventListener('change', () => { // sofort speichern
+              saveSettings({ orga_line_mode: lineModeSelect.value === 'p' ? 'p' : 'br' });
+            });
+
+            panel.querySelector('#orga-icon-reset').addEventListener('click', () => { // zurück zu den Standard-Icons
+                saveSettings({ orga_icons: { ...ORGA_ICON_DEFAULTS } });
+                panel.querySelectorAll('.orga-icon-input').forEach(input => {
+                    input.value = ORGA_ICON_DEFAULTS[input.dataset.key] ?? '';
+                });
+                refreshStatusSelects(modal);
+            });
+
+            gear.addEventListener('click', () => {
+                panel.classList.toggle('open');
+                gear.classList.toggle('open', panel.classList.contains('open'));
+            });
         }
 
         // ── Generische Modal-Fabrik ────────────────────────────────────────
@@ -3606,10 +4040,16 @@
                 <div class="modal-dialog">
                     <div class="modal-content">
                         <div class="modal-header">
-                            <button type="button" class="close" id="orga-close-x">×</button>
                             <h4 class="modal-title">${title}</h4>
+                            <button type="button" class="orga-format-btn orga-btn-bold" id="orga-bold-btn" title="Fett (Strg+B)">B</button>
+                            <button type="button" class="orga-format-btn orga-btn-italic" id="orga-italic-btn" title="Kursiv (Strg+I)">I</button>
+                            <span class="glyphicon glyphicon-cog orga-settings-btn" id="orga-settings-btn" title="Einstellungen der Projektnotiz (Icons)"></span>
+                            <button type="button" class="close" id="orga-close-x">&times;</button>
                         </div>
-                        <div class="modal-body" id="orga-rows-container"></div>
+                        <div class="modal-body">
+                            <div class="orga-icon-settings" id="orga-icon-settings"></div>
+                            <div id="orga-rows-container"></div>
+                        </div>
                         <div class="modal-footer">
                             <button type="button" class="btn btn-primary" id="orga-save-btn">Speichern</button>
                             <button type="button" class="btn btn-default" id="orga-cancel-btn">Abbrechen</button>
@@ -3621,8 +4061,17 @@
             setTimeout(() => modal.classList.add('in'), 200);
 
             const rowsContainer = modal.querySelector('#orga-rows-container');
-            initialRows.forEach(data => rowsContainer.appendChild(createRow(rowsContainer, data)));
+            initialRows.forEach(data => rowsContainer.appendChild(createAnyRow(rowsContainer, data)));
             setupContainerDrag(rowsContainer);
+
+            buildIconSettings(modal); // Zahnrad-Panel mit den Icon-Einstellungen
+
+            [['#orga-bold-btn', 'bold'], ['#orga-italic-btn', 'italic']].forEach(([sel, cmd]) => { // Formatier-Leiste
+                const btn = modal.querySelector(sel);
+                if (!btn) return;
+                btn.addEventListener('mousedown', e => e.preventDefault()); // Auswahl im Textfeld behalten
+                btn.addEventListener('click', () => applyRichFormat(cmd));
+            });
 
             function closeModal() {
                 modal.classList.remove('in');
@@ -3636,7 +4085,8 @@
 
             modal.querySelector('#orga-save-btn').addEventListener('click', () => {
                 const lines = [...rowsContainer.querySelectorAll('.orga-row')]
-                    .map(r => buildRowText(r)).join('\n');
+                    .map(r => r.dataset.type === 'text' ? buildTextRowHtml(r) : buildRowText(r)) // beides liefert fertiges HTML
+                    .filter(l => l !== null && l !== ''); // leere Zeilen fliegen raus
                 closeModal();
                 onSave(lines);
             });
@@ -3657,7 +4107,10 @@
                     if (!doc) return;
                     doc.body.focus();
                     doc.execCommand('selectAll', false, null);
-                    const html = lines.split('\n').map(l => `${l}<br>`).join('');
+                    const htmlLines = Array.isArray(lines) ? lines : String(lines).split('\n'); // Array (Orga- + Textzeilen) oder alter String
+                    const html = getOrgaLineMode() === 'p'
+                      ? htmlLines.map(l => `<p>${l}</p>`).join('') // jede Zeile ein eigenes <p>-Element (Abstand über die Absätze)
+                      : htmlLines.map(l => `${l}<br>`).join(''); // Standard: Zeilen per <br> trennen
                     if (!doc.execCommand('insertHTML', false, html)) {
                         doc.body.innerHTML = html;
                         doc.body.dispatchEvent(new Event('input', { bubbles: true }));

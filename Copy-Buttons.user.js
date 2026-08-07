@@ -1,19 +1,24 @@
 // ==UserScript==
 // @name         Copy-Buttons
 // @namespace    https://github.com/zentolik
-// @version      1.01
+// @version      1.02
 // @description  doing stuff ʕ·͡ᴥ·ʔ
 // @author       Zentolik
 // @match        https://ipsi.securewebsystems.net/project/detailed/*
+// @match        https://ipsi.securewebsystems.net/contract/detailed/*
+// @match        https://ipsi.securewebsystems.net/dailyresults
+// @match        https://app.absence.io/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=euroweb.de
 // @updateURL    https://github.com/zentolik/ipsi-buttons/raw/main/Copy-Buttons.user.js
 // @downloadURL  https://github.com/zentolik/ipsi-buttons/raw/main/Copy-Buttons.user.js
-// @grant        none
+// @grant        GM_setValue
+// @grant        GM_getValue
+// @grant        GM_addValueChangeListener
 // ==/UserScript==
 
 !(function() { // ʕ·͡ᴥ·ʔ hi & ty <3
     'use strict';
-    const SCRIPT_VERSION = '1.01';
+    const SCRIPT_VERSION = '1.02';
     console.log(`ʕ·͡ᴥ·ʔ *bup* v${SCRIPT_VERSION}`);
     let settings = {
         button_position: true, // ändert die position vom btn (wenn auf "false", empfähle ich "copy_icon" zu aktivieren") //
@@ -24,7 +29,7 @@
         button_color: 'blue', // red / yellow / blue / cyan / green / gray / #rrggbb (HEX-Color) //
         delete_button: false, // erstellt ein delete-button, der beim klicken die projekt-daten aus dem local storage löscht //
         vsc_open: false, // Linksklick auf den Pfad-Button listet die Ordner im Pfad und öffnet sie in VS Code (benötigt den lokalen ipsi-vsc-helper) //
-        sandbox_check: false, // prüft beim Laden der Seite nacheinander alle Formix-Einträge und markiert in der Status-Spalte, ob die Sandbox aktiviert ist //
+        sandbox_check: true, // prüft beim Laden der Seite nacheinander alle Formix-Einträge und markiert in der Status-Spalte, ob die Sandbox aktiviert ist //
         darkmode: false,
         default_email_client: 'browser',
         department: '',
@@ -32,6 +37,7 @@
         user_email: '',
         ls_sort: 'project_id', // Sortierkriterium der Projekt-Auflistung: 'project_id' oder 'client_id' (wird auch als führender Wert im Label angezeigt)
         ps_labels: true, // zeigt in der Meilensteine-Übersicht die PS-/Zeit-Labels an //
+        auto_collect: true, // liest die Projektdaten (KD-Nr., DFS-Speicherort usw.) automatisch beim Laden der Seite aus – Speicherort über die DFS-API, Domains-Panel nur als Fallback //
         orga_icons: { // Icons für die Status der Orga-Projektnotiz (leer = kein Icon) – einstellbar über das Zahnrad im Orga-Modal //
             open: '📁',
             progress: '⚙️',
@@ -39,7 +45,15 @@
             canceled: '❌',
             delayed: '🕒',
         },
-  orga_line_mode: 'br', // Zeilenabstand in der Orga-Notiz: 'br' (Standard) oder 'br2' (zwei <br>) – einstellbar über das Zahnrad im Orga-Modal //
+        orga_line_mode: 'br', // Zeilenabstand in der Orga-Notiz: 'br' (Standard) oder 'br2' (zwei <br>) – einstellbar über das Zahnrad im Orga-Modal //
+        week_panel: true, // Panel mit den Wochenstunden auf der Tagesresultate-Seite //
+        week_hours: 39, // Soll-Stunden pro Arbeitswoche //
+        absence_day_hours: 7.8, // Stunden, mit denen ein Abwesenheitstag (Urlaub, Krank, ...) gezählt wird //
+        absence_work_reasons: ['Office', 'Mobile Office'], // Abwesenheits-Arten, an denen normal gestempelt wird (werden NICHT angerechnet) //
+        absence_count_holidays: true, // Feiertage wie einen Abwesenheitstag anrechnen //
+        absence_include_pending: true, // noch nicht genehmigte Abwesenheiten mitzählen //
+        absence_hours_mode: 'max', // 'max' = gestempelte oder angerechnete Zeit (das Höhere) / 'sum' = beides addieren / 'credit' = an Abwesenheitstagen nur die Gutschrift //
+        absence_auto_sync: false, // absence.io automatisch in einem Hintergrund-Tab abfragen, wenn die Daten älter als 12 Std. sind //
     };
 
     const saveSettings = (newSettings) => { // Settings speichern – auch außerhalb des Settings-Popups nutzbar //
@@ -68,9 +82,51 @@
         loopListener = true,
         project_id = window.location.pathname.split('detailed/')[1]; // Projekt-ID (NICHT KD-NR)
 
+    // ── Seiten-Typ: Projekt- oder Vertrags-Seite ─────────────────────
+    // Die Vertrags-Seite (/contract/detailed/…) kennt weder Projekt-ID noch Projekt-Typ.
+    // Alles andere (KD-Nr., Adresse, E-Mail, Firma/Brand, DFS-Speicherort, Live-Domain)
+    // steht dort genauso zur Verfügung und wird deshalb auch dort genutzt.
+    const page_type = window.location.pathname.includes('/contract/detailed/') ? 'contract' : 'project';
+    const is_contract = page_type === 'contract';
+    const url_id = window.location.pathname.split('detailed/')[1] || ''; // Projekt-ID (Projekt-Seite) bzw. KD-Nr. (Vertrags-Seite)
+    if (is_contract) project_id = ''; // auf der Vertrags-Seite gibt es kein Projekt
+
+    // Info-Panel mit Firma / Brand / Adresse / E-Mail:
+    // Projekt-Seite  -> "collapseOne" (Projektinformationen)
+    // Vertrags-Seite -> "collapseTwo" (Vertragsdaten)
+    const INFO_PANEL_ID = is_contract ? 'collapseTwo' : 'collapseOne';
+    const infoPanelLabels = () => Array.from(document.querySelectorAll(`#${INFO_PANEL_ID} .panel-body p b`));
+    const findInfoLabel = (...names) => infoPanelLabels().find(el => names.includes((el.innerText || '').toLowerCase().trim()));
+
+    // Die Vertrags-Seite schreibt den Ort als "ZIP : 84405, Dorfen", die Projekt-Seite als
+    // "Dorfen, ZIP 84405" – damit die Daten überall identisch aussehen, wird das angeglichen.
+    const normalizeLocation = (value) => {
+        const text = String(value || '').trim();
+        const zip = text.match(/^ZIP\s*:?\s*(\d{4,5})\s*,\s*(.+)$/i);
+        return zip ? `${zip[2].trim()}, ZIP ${zip[1]}` : text;
+    };
+
+    // Speicher-Key im localStorage: Projekte weiterhin unter der reinen (numerischen)
+    // Projekt-ID, Verträge unter "contract_<KD-Nr.>" – so überschreiben sich beide Seiten nicht.
+    const CONTRACT_KEY_PREFIX = 'contract_';
+    const storage_key = is_contract ? CONTRACT_KEY_PREFIX + url_id : url_id;
+
+    const lsKeyInfo = (key) => { // Keys aus dem lokalen Speicher einordnen (für die Auflistung im Settings-Popup)
+        if (/^\d+$/.test(key)) return { id: key, type: 'project', link: `/project/detailed/${key}`, label: 'Projektlink', title: `Link zur Projekt-Seite ${key}` };
+        const contract_id = key.startsWith(CONTRACT_KEY_PREFIX) ? key.slice(CONTRACT_KEY_PREFIX.length) : '';
+        if (/^\d+$/.test(contract_id)) return { id: contract_id, type: 'contract', link: `/contract/detailed/${contract_id}`, label: 'Vertragslink', title: `Link zur Vertrags-Seite ${contract_id}` };
+        return null;
+    };
+    console.log(`ʕ·͡ᴥ·ʔ Seite: ${page_type} | Speicher-Key: ${storage_key}`);
+
+    if (location.hostname.indexOf('absence.io') !== -1) { // auf absence.io wird nur der Abwesenheits-Sync gebraucht
+        cbAbsenceSync();
+        return;
+    }
+
 
     const loadFromLocalStorage = () => { // Funktion, zum laden der Settings, aus dem lokalen Speicher
-        const storedData = localStorage.getItem(project_id),
+        const storedData = localStorage.getItem(storage_key),
               storedSettings = localStorage.getItem('settings'); // (versucht) "settings" aus dem lokalen Speicher zu ziehen
         if (storedSettings) { // Prüft, ob sich im lokalen Speicher sich "settings" befinden.
             let parsedSettings = JSON.parse(storedSettings);
@@ -94,10 +150,12 @@
 
         if (storedData) {
             const storedObject = JSON.parse(storedData);
-            if (storedObject.project_id === project_id) {
+            const sameEntity = is_contract ? String(storedObject.client_id || '') === url_id : storedObject.project_id === project_id;
+            if (sameEntity) {
                 createButtonContainer();
                 createSettings();
-                createCopyButton(false, false, false, 'copyPath');
+                if (edoList.includes(storedObject.edo)) createCopyButton(false, false, false, 'copyPath'); // ohne DFS-Speicherort keinen Pfad-Button
+                if (!edoList.includes(storedObject.edo)) refreshDfsForStored(storedObject); // Pfad-Button nachreichen, falls doch ein DFS existiert
                 createCopyButton(false, false, false, 'copyClientdata');
                 injectMilestoneIcons();
                 return true;
@@ -106,73 +164,191 @@
         return false;
     };
 
-    const checkForElement = () => {
-        if (loadFromLocalStorage()) return clearInterval(intervalId);
+    // ── DFS-Speicherort über die DFS-API ermitteln (ohne das Domains-Panel) ──
+    // Der letzte Deployment-Eintrag verrät Speicherort (department_id) und Domain.
+    const DFS_API_URL = 'https://dfs.securewebsystems.net/api/project-deployments';
+    const DFS_TOKEN_URL = '/dfsdomains/panel/token';
+    const DFS_DEPARTMENTS = { '113': 'cerberus', '1113': 'nidhogg', '128': 'plovdiv', '11113': 'pandava' }; // department_id → DFS-Speicherort
+    const DFS_ACTIVE_STATES = ['ON_DEMO', 'ON_TEST']; // nur dann liegt das Projekt auch wirklich auf dem DFS
+    const dfsLookup = { state: 'idle', edo: '', domain: '', startedAt: 0 }; // idle | pending | done | failed
 
-        let btnPrimary = document.querySelector(`button[${selectors.server_attr[0]}].btn-primary`),
-              serverElement = Array.from(document.querySelectorAll(`b[${selectors.dfs_attr}]`)).find(el => el.innerText.toLowerCase().trim() === "server:"),
-              firmaElement = Array.from(document.querySelectorAll('#collapseOne .panel-body p b')).find(el => el.innerText.toLowerCase().trim() === "firma:"),
-              brandElement = Array.from(document.querySelectorAll('#collapseOne .panel-body p b')).find(el => el.innerText.toLowerCase().trim() === "brand:"),
-              typElement = Array.from(document.querySelectorAll('#collapseOne .panel-body p b')).find(el => el.innerText.toLowerCase().trim() === "typ"),
-              emailElement = Array.from(document.querySelectorAll('#collapseOne .panel-body p b')).find(el => el.innerText.toLowerCase().trim() === "e-mail:");
-        if (!btnPrimary) {btnPrimary = document.querySelector(`div[${selectors.server_attr[1]}] > button.btn-primary`);}
-        if ((btnPrimary || serverElement) && loopListener) {
-            edo = btnPrimary?.innerText.toLowerCase().trim() || edo;
-            if (serverElement) {
-                const selectElement = serverElement.closest(`tr[${selectors.dfs_attr}]`)?.querySelector(`select[${selectors.dfs_attr}]`);
-                selectElement?.addEventListener("input", () => {
-                    const selectedOption = selectElement.options[selectElement.selectedIndex]?.innerText.split(' (')[0];
-                    document.querySelector(`button.btn-success[${selectors.dfs_attr}]`)?.addEventListener('click', () => {
-                        edo = selectedOption.toLowerCase().trim();
-                    });
-                });
-            }
-            if (edoList.includes(edo)) {
-                let client_id = document.querySelector('h1').textContent.replace(/\D/g, ''),
-                    client_domain = document.querySelector(`a[${selectors.href_attr}].text-primary`).textContent,
-                    client_data = emailElement.parentElement.parentElement.parentElement.querySelector('p').innerText.split('\n'),
-                    client_brand = client_data[0],
-                    client_name = client_data[1],
-                    client_street = client_data[2],
-                    client_location = client_data[3],
-                    client_email = emailElement.parentElement.textContent.replace('E-Mail: ',''),
-                    project_company = firmaElement.parentElement.querySelector('img').alt,
-                    project_brand = brandElement.parentElement.querySelector('img').alt,
-                    project_type = typElement.parentElement.textContent.replace('Typ: ','');
-                const dataToStore = {
-                    client_id,
-                    client_domain,
-                    client_brand,
-                    client_name,
-                    client_street,
-                    client_location,
-                    client_email,
-                    edo,
-                    project_id,
-                    project_company,
-                    project_brand,
-                    project_type
-                };
-                const previouslyStored = JSON.parse(localStorage.getItem(project_id) || '{}');
-                if (previouslyStored.special_ps) dataToStore.special_ps = previouslyStored.special_ps; // gespeicherte Special-PS beim Neuanlegen der Projektdaten nicht verlieren
-                localStorage.setItem(project_id, JSON.stringify(dataToStore));
-                createButtonContainer();
-                createSettings();
-                loopListener = false;
-                createCopyButton(edo, client_id, client_domain, 'copyPath');
-                createCopyButton(edo, client_id, client_domain, 'copyClientdata');
-                injectMilestoneIcons();
-                clearInterval(intervalId);
-            }
-        }
+    const dfsLookupTimedOut = () => { // gibt dem Panel-Fallback Zeit, bevor es ohne Speicherort weitergeht
+      if (!dfsLookup.startedAt) return false;
+      return Date.now() - dfsLookup.startedAt > (dfsLookup.state === 'failed' ? 15000 : 30000);
+    };
+
+    const lookupDfs = (clientId) => { // holt den aktuellsten Deployment-Eintrag des Vertrags
+      if (dfsLookup.state !== 'idle' || !clientId) return;
+      dfsLookup.state = 'pending';
+      dfsLookup.startedAt = Date.now();
+      fetch(DFS_TOKEN_URL, { credentials: 'same-origin' })
+        .then(res => res.json())
+        .then(token => fetch(`${DFS_API_URL}?ordering=-date_created&contract_number=${encodeURIComponent(clientId)}&limit=1`, {
+          headers: { Authorization: `${token.token_type} ${token.access_token}` },
+        }))
+        .then(res => res.json())
+        .then(json => {
+          const deployment = json?.results?.[0] || null;
+          dfsLookup.domain = deployment?.domain || '';
+          dfsLookup.edo = deployment && DFS_ACTIVE_STATES.includes(deployment.state) ? (DFS_DEPARTMENTS[String(deployment.department_id)] || '') : ''; // kein aktives DFS → kein Speicherort
+          dfsLookup.state = 'done';
+        })
+        .catch(err => { // API nicht erreichbar → zur Sicherheit auf das Domains-Panel zurückfallen
+          console.warn('[Copy-Buttons] DFS-Abfrage fehlgeschlagen:', err);
+          dfsLookup.state = 'failed';
+        });
+    };
+
+    const refreshDfsForStored = (storedObject) => { // gespeichertes Projekt ohne Speicherort: im Hintergrund prüfen, ob inzwischen ein DFS existiert
+      lookupDfs(storedObject.client_id);
+      const timer = setInterval(() => {
+        if (dfsLookup.state === 'pending' || dfsLookup.state === 'idle') return;
+        clearInterval(timer);
+        if (!edoList.includes(dfsLookup.edo)) return; // weiterhin kein DFS → alles bleibt wie es ist
+        localStorage.setItem(storage_key, JSON.stringify({ ...storedObject, edo: dfsLookup.edo }));
+        document.querySelector('#copyClientdata')?.remove(); // kurz entfernen, damit die Button-Reihenfolge stimmt
+        createCopyButton(false, false, false, 'copyPath');
+        createCopyButton(false, false, false, 'copyClientdata');
+      }, 300);
+      setTimeout(() => clearInterval(timer), 30000);
+    };
+
+    // ── Projektdaten automatisch beim Seitenaufruf einsammeln ────────
+    // Öffnet die dafür nötigen Panels (Domains-Panel & Projekt-Infos) unsichtbar,
+    // damit KD-Nr., DFS-Speicherort usw. ohne manuelles Aufklappen gelesen werden.
+    const autoPanelIds = () => (dfsLookup.state === 'failed' ? [INFO_PANEL_ID, 'dfs_domain_panel'] : [INFO_PANEL_ID]); // das Domains-Panel nur noch als Fallback, wenn die DFS-API nicht antwortet
+    const autoCollect = { opened: [], details: [], started: 0, finished: false };
+
+    const addAutoCollectStyle = () => { // Panel wird zum Auslesen aus dem sichtbaren Bereich geschoben (wird gerendert, macht aber keinen Layout-Sprung)
+      if (document.getElementById('cb_auto_collect_style')) return;
+      const style = document.createElement('style');
+      style.id = 'cb_auto_collect_style';
+      style.textContent = '.cb_auto_collect { position: absolute !important; left: -99999px !important; top: 0 !important; width: 1200px !important; }';
+      document.head.appendChild(style);
+    };
+
+    const togglePanel = (panel) => { // "Umschalten" klicken – das löst auch das Nachladen der Domain-Daten aus
+      const link = document.querySelector(`a[data-toggle="collapse"][href="#${panel.id}"]`);
+      if (link) return link.click();
+      window.jQuery && window.jQuery(panel).collapse('toggle');
+    };
+
+    const ensureProjectData = () => { // sorgt dafür, dass die Daten im DOM stehen – ohne dass man selbst etwas aufklappen muss
+      if (autoCollect.finished) return;
+      if (!autoCollect.started) { autoCollect.started = Date.now(); addAutoCollectStyle(); }
+
+      autoPanelIds().forEach(id => {
+        const panel = document.getElementById(id);
+        if (!panel || panel.classList.contains('in') || autoCollect.opened.includes(panel)) return;
+        autoCollect.opened.push(panel);
+        panel.classList.add('cb_auto_collect');
+        togglePanel(panel);
+      });
+
+      (dfsLookup.state === 'failed' ? document.querySelectorAll('#dfs_domain_panel button .glyphicon-chevron-down') : []).forEach(icon => { // nur im Fallback: DFS-Details aufklappen, dort sitzt der Speicherort-Button
+        const btn = icon.closest('button');
+        if (!btn || autoCollect.details.includes(btn)) return;
+        autoCollect.details.push(btn);
+        btn.click();
+      });
+
+      if (Date.now() - autoCollect.started > 25000) finishAutoCollect(); // Notbremse, falls die Daten nicht geladen werden
+    };
+
+    const finishAutoCollect = () => { // alles wieder zuklappen, was automatisch geöffnet wurde
+      if (autoCollect.finished) return;
+      autoCollect.finished = true;
+      autoCollect.details.forEach(btn => { if (btn.isConnected && btn.querySelector('.glyphicon-chevron-up')) btn.click(); });
+      autoCollect.details = [];
+      autoCollect.opened.forEach(panel => {
+        if (panel.classList.contains('in')) togglePanel(panel);
+        setTimeout(() => panel.classList.remove('cb_auto_collect'), 700); // erst nach der Zuklapp-Animation
+      });
+      autoCollect.opened = [];
+    };
+
+    const checkForElement = () => {
+      if (loadFromLocalStorage()) return clearInterval(intervalId);
+      if (!loopListener) return;
+
+      const clientIdFromPage = is_contract
+          ? (url_id || (document.querySelector('h1')?.textContent || '').replace(/\D/g, '')) // Vertrags-Seite: die KD-Nr. steht direkt in der URL
+          : (document.querySelector('h1')?.textContent || '').replace(/\D/g, '');
+      if (clientIdFromPage) lookupDfs(clientIdFromPage); // DFS-Speicherort + Domain im Hintergrund holen (ohne das Domains-Panel zu öffnen)
+
+      if (settings.auto_collect !== false) ensureProjectData(); // Projekt-Infos (und im Fallback das Domains-Panel) bereitstellen
+
+      const firmaElement = findInfoLabel('firma:'),
+            brandElement = findInfoLabel('brand:'),
+            typElement = findInfoLabel('typ', 'typ:'), // "Typ" steht nur auf der Projekt-Seite
+            emailElement = findInfoLabel('e-mail:');
+      if (!clientIdFromPage || !firmaElement || !brandElement || !emailElement) return; // Infos stehen noch nicht im DOM
+      if (!is_contract && !typElement) return; // auf der Projekt-Seite gehört der Typ dazu
+
+      // Speicherort: bevorzugt aus der DFS-API, sonst aus dem Domains-Panel (Fallback)
+      const btnPrimary = document.querySelector(`button[${selectors.server_attr[0]}].btn-primary`) || document.querySelector(`div[${selectors.server_attr[1]}] > button.btn-primary`);
+      const serverElement = Array.from(document.querySelectorAll(`b[${selectors.dfs_attr}]`)).find(el => el.innerText.toLowerCase().trim() === "server:");
+      if (serverElement) { // wird der Speicherort im Panel umgestellt, den neuen Wert übernehmen
+        const selectElement = serverElement.closest(`tr[${selectors.dfs_attr}]`)?.querySelector(`select[${selectors.dfs_attr}]`);
+        selectElement?.addEventListener("input", () => {
+          const selectedOption = selectElement.options[selectElement.selectedIndex]?.innerText.split(' (')[0];
+          document.querySelector(`button.btn-success[${selectors.dfs_attr}]`)?.addEventListener('click', () => {
+            edo = selectedOption.toLowerCase().trim();
+          });
+        });
+      }
+
+      if (btnPrimary) edo = btnPrimary.innerText.toLowerCase().trim() || edo;
+      else if (dfsLookup.state === 'done') edo = dfsLookup.edo;
+      else if (!dfsLookupTimedOut()) return; // kurz auf die DFS-Antwort warten
+
+      const client_id = clientIdFromPage,
+            client_domain = document.querySelector(`a[${selectors.href_attr}].text-primary`)?.textContent || dfsLookup.domain || '',
+            client_data = (emailElement.parentElement.parentElement.parentElement.querySelector('p')?.innerText || '').split('\n'),
+            client_brand = (client_data[0] || '').trim(),
+            client_name = (client_data[1] || '').trim(),
+            client_street = (client_data[2] || '').trim(),
+            client_location = normalizeLocation(client_data[3]),
+            client_email = emailElement.parentElement.textContent.replace('E-Mail: ', '').trim(),
+            project_company = firmaElement.parentElement.querySelector('img')?.alt || '',
+            project_brand = brandElement.parentElement.querySelector('img')?.alt || '',
+            project_type = typElement ? typElement.parentElement.textContent.replace('Typ: ', '').trim() : ''; // Vertrags-Seite: kein Projekt-Typ vorhanden
+
+      const hasEdo = edoList.includes(edo); // ohne gültigen DFS-Speicherort gibt es keinen Pfad-Button
+      const dataToStore = {
+        client_id,
+        client_domain,
+        client_brand,
+        client_name,
+        client_street,
+        client_location,
+        client_email,
+        edo: hasEdo ? edo : '',
+        project_id,
+        project_company,
+        project_brand,
+                project_type,
+                page_type // 'project' (Projekt-Seite) oder 'contract' (Vertrags-Seite)
+      };
+      const previouslyStored = JSON.parse(localStorage.getItem(storage_key) || '{}');
+      if (previouslyStored.special_ps) dataToStore.special_ps = previouslyStored.special_ps; // gespeicherte Special-PS beim Neuanlegen der Projektdaten nicht verlieren
+      localStorage.setItem(storage_key, JSON.stringify(dataToStore));
+      finishAutoCollect(); // automatisch geöffnete Panels wieder schließen
+      createButtonContainer();
+      createSettings();
+      loopListener = false;
+      if (hasEdo) createCopyButton(edo, client_id, client_domain, 'copyPath'); // kein DFS/Demo → kein Pfad-Button
+      createCopyButton(edo, client_id, client_domain, 'copyClientdata');
+      injectMilestoneIcons();
+      clearInterval(intervalId);
     };
 
     const createButtonContainer = () => {
         if (!document.querySelector('.copyBtnContainer')) {
             const container = document.createElement('div');
             const user_bar = document.querySelector('user-bar');
-            const casbar = user_bar.shadowRoot.querySelector('.casbar-wrapper');
-            const casbar_height = casbar.clientHeight;
+            const casbar = user_bar?.shadowRoot?.querySelector('.casbar-wrapper');
+            const casbar_height = casbar ? casbar.clientHeight : 0;
             Object.assign(container.style, {
                 position: 'fixed', right: settings.button_position ? settings.button_position_space : '0', bottom: settings.button_position ? `calc(${settings.button_position_space} + (${casbar_height} * 1px))` : '25vh', display: 'flex', gap: '5px', zIndex: '1000'
             });
@@ -187,7 +363,7 @@
             const removeButton = createButton('removeButton', 'btn btn-danger glyphicon glyphicon-trash', '');
             removeButton.title = 'Projekt aus den Lokalen Daten löschen und Buttons entfernen';
             removeButton.addEventListener('click', () => {
-                localStorage.removeItem(project_id);
+                localStorage.removeItem(storage_key);
                 const copyPath = document.querySelector('#copyPath');
                 if (copyPath) {
                     copyPath.remove();
@@ -221,7 +397,7 @@
     ];
 
     const openZammadTicket = (action, mbName) => {
-        const data = JSON.parse(localStorage.getItem(project_id) || "{}");
+        const data = JSON.parse(localStorage.getItem(storage_key) || "{}");
         const userEmail = (settings.user_email || "") + "@" + "wwwe" + ".de";
         const _domRows2 = (function(){
             var res = { live: '', demo: '' };
@@ -270,7 +446,7 @@
         const q = String.fromCharCode(63), amp = String.fromCharCode(38), eq = String.fromCharCode(61);
         const zammadInfo = (function(){
             try {
-                const data = JSON.parse(localStorage.getItem(project_id) || "{}");
+                const data = JSON.parse(localStorage.getItem(storage_key) || "{}");
                 const userEmail = (settings.user_email || "") + "@" + "wwwe" + ".de";
                 const payload = Object.assign({}, data, {
                     department: settings.department || "",
@@ -296,7 +472,7 @@
         icon.addEventListener('click', (e) => {
             e.preventDefault();
             e.stopPropagation();
-            const data = JSON.parse(localStorage.getItem(project_id) || "{}");
+            const data = JSON.parse(localStorage.getItem(storage_key) || "{}");
             if (action === "domaintransfer") {
                 // Nur EIN Popup pro Klick: die DOKU-Bruecke oeffnen.
                 // Die DOKU-URL traegt bereits den Zammad-cb-Payload + #wwwe_dt.
@@ -341,7 +517,7 @@
         let copy = '';
         customColor = settings.button_color.startsWith("#");
         color_class = customColor ? null : colorMap[buttonColor] || color_class;
-        const data = JSON.parse(localStorage.getItem(project_id));
+        const data = JSON.parse(localStorage.getItem(storage_key));
         if ((!edo && !client_id && !client_domain || type === 'copyClientdata') && data) {
             client_domain = data.client_domain;
             client_id = data.client_id;
@@ -1586,6 +1762,14 @@
                 </div>
 
                 <div class="cb_setting">
+                    <input type="checkbox" id="auto_collect" name="auto-collect"/>
+                    <label class="cb_switch" for="auto_collect">
+                        <span class="setting_title">Auto-Daten <span class="glyphicon glyphicon-info-sign cb_info-sign" title="Liest die Projektdaten (KD-Nr., DFS-Speicherort, Kundendaten usw.) automatisch beim Laden der Projektseite aus.&#013;Der DFS-Speicherort kommt direkt über die DFS-API – das Domains-Panel wird dafür nicht mehr gebraucht.&#013;Nur falls die API nicht antwortet, wird das Panel kurz unsichtbar geöffnet und danach wieder zugeklappt."></span></span>
+                        <span class="box"></span>
+                    </label>
+                </div>
+
+                <div class="cb_setting">
                     <label class="cb_switch" for="cb_default_email_client">
                         <span class="setting_title always_active">E-Mail Client <span class="glyphicon glyphicon-info-sign cb_info-sign" title="Gib an, ob das veschicken von E-Mail über die Outlook-App oder den Browser laufen soll."></span></span>
                         <select id="cb_default_email_client" class="box" name="cb_default_email_client">
@@ -1687,19 +1871,22 @@
             for (let i = 0; i < localStorage.length; i++) {
                 const key = localStorage.key(i);
 
-                if (/^\d+$/.test(key)) { // Checken, ob "Key" nur aus Nummern besteht
-                    const value = localStorage.getItem(key);
-                    const value_obj = JSON.parse(value);
+                const keyInfo = lsKeyInfo(key); // Projekte (numerischer Key) UND Verträge ("contract_<KD-Nr.>") einsammeln
+                if (keyInfo) {
+                    let value_obj = null;
+                    try { value_obj = JSON.parse(localStorage.getItem(key)); } catch (e) { value_obj = null; }
+                    if (value_obj && typeof value_obj === 'object') {
 
-                    // Ältere Versionen (alle unter 0.82) nutzen "url_id" als Key für Projekt-ID, anstatt "project_id". Das wird hier angepasst ("url_id" → "project_id).
-                    if ('url_id' in value_obj) value_obj.project_id = value_obj.url_id;
+                        // Ältere Versionen (alle unter 0.82) nutzen "url_id" als Key für Projekt-ID, anstatt "project_id". Das wird hier angepasst ("url_id" → "project_id).
+                        if ('url_id' in value_obj) value_obj.project_id = value_obj.url_id;
 
-                    items.push({ key, value_obj });
+                        items.push({ key, value_obj, keyInfo });
+                    }
                 }
             }
 
             // Nach dem gewählten Kriterium sortieren. Für 'project_id' nutzen wir den Key (= Projekt-ID), sonst das jeweilige Feld (z.B. client_id).
-            const sortValueOf = (item) => sortField === 'project_id' ? item.key : (item.value_obj[sortField] ?? '');
+        const sortValueOf = (item) => sortField === 'project_id' ? item.keyInfo.id : (item.value_obj[sortField] ?? '');
             items.sort((a, b) => {
                 const av = String(sortValueOf(a)).trim();
                 const bv = String(sortValueOf(b)).trim();
@@ -1709,7 +1896,7 @@
                 return av.localeCompare(bv, undefined, { numeric: true, sensitivity: 'base' }); // numerisch-bewusst (2 vor 10)
             });
 
-            items.forEach(({ key, value_obj }) => {
+        items.forEach(({ key, value_obj, keyInfo }) => {
                 const label = document.createElement('label');
                 const checkbox = document.createElement('input');
                 checkbox.type = 'checkbox';
@@ -1729,15 +1916,15 @@
                 };
 
                 let project_btnTitle = Object.entries(objChecker) // title-Content konstruieren und nur elemente einsetzten, wenn vorhandene (bzw. wenn nicht "undefined")
-                    .filter(([key, value]) => value_obj[key] !== undefined)
+                .filter(([key]) => value_obj[key] !== undefined && String(value_obj[key]).trim() !== '') // leere Werte (z.B. Projekt-Typ auf der Vertrags-Seite) nicht anzeigen
                     .map(([_, formattedValue]) => formattedValue + '&#013')
                     .join('');
 
                 // Führender Wert im Label: bei 'project_id' die Projekt-ID (= Key), sonst der gewählte Wert (z.B. Kunden-ID). Fehlt der Wert, zeigen wir "–".
-                const rawLeadValue = sortField === 'project_id' ? key : value_obj[sortField];
+                const rawLeadValue = sortField === 'project_id' ? keyInfo.id : value_obj[sortField];
                 const leadValue = (rawLeadValue !== undefined && String(rawLeadValue).trim() !== '') ? rawLeadValue : '–';
 
-                label.innerHTML = `${leadValue} | <a href="/project/detailed/${key}" title="Link zur Projekt-Seite ${key}" target="_blank">Projektlink</a> <span class="glyphicon glyphicon-info-sign cb_info-sign" title="${project_btnTitle}"></span>`;
+                label.innerHTML = `${leadValue} | <a href="${keyInfo.link}" title="${keyInfo.title}" target="_blank">${keyInfo.label}</a> <span class="glyphicon glyphicon-info-sign cb_info-sign" title="${project_btnTitle}"></span>`;
 
                 label.appendChild(checkbox);
                 // label.appendChild(document.createTextNode(`${key}`));
@@ -1944,9 +2131,9 @@
                 copyClientdata.remove();
             }
 
-            const storedData = JSON.parse(localStorage.getItem(project_id));
+            const storedData = JSON.parse(localStorage.getItem(storage_key));
             if (storedData) {
-                createCopyButton(false, false, false, 'copyPath');
+                if (edoList.includes(storedData.edo)) createCopyButton(false, false, false, 'copyPath'); // ohne DFS-Speicherort keinen Pfad-Button
                 createCopyButton(false, false, false, 'copyClientdata');
                 injectMilestoneIcons();
             }
@@ -2120,7 +2307,7 @@
                     target: '_blank'
                 };
 
-                const projectData = JSON.parse(localStorage.getItem(project_id));
+                const projectData = JSON.parse(localStorage.getItem(storage_key));
                 const name = settings.user || 'anonym';
 
                 if (supportSelector.value === 'viscomp') {
@@ -2279,6 +2466,7 @@
         document.querySelector('#vsc_open').checked = settings.vsc_open;
         document.querySelector('#sandbox_check').checked = settings.sandbox_check;
         document.querySelector('#ps_labels').checked = settings.ps_labels !== false;
+        document.querySelector('#auto_collect').checked = settings.auto_collect !== false;
 
         const popupColor = document.querySelector('.color_btn.popup_btn');
         popupColor.className = 'color_btn popup_btn';
@@ -2768,7 +2956,7 @@
 
         // ── Special-Tasks: PS werden per Klick festgelegt und mit den Projekt-Infos
         //    im lokalen Speicher abgelegt (Schlüssel: Gruppe Name + Benutzer + Assistent) ──
-        const getStoredProject = () => { try { return JSON.parse(localStorage.getItem(project_id) || '{}'); } catch (e) { return {}; } };
+        const getStoredProject = () => { try { return JSON.parse(localStorage.getItem(storage_key) || '{}'); } catch (e) { return {}; } };
         const getSpecialPsMap = () => getStoredProject().special_ps || {};
         const saveSpecialPs = (key, ps) => { // ps = Zahl in PS oder null zum Entfernen
             const stored = getStoredProject();
@@ -2776,7 +2964,7 @@
             if (ps === null) delete map[key];
             else map[key] = ps;
             stored.special_ps = map;
-            localStorage.setItem(project_id, JSON.stringify(stored));
+            localStorage.setItem(storage_key, JSON.stringify(stored));
         };
 
         const upsertSpecialValue = (host, psFloat, key) => { // gespeicherte PS als "2.00 PS" in die Betrag-Zelle schreiben (klickbar zum Ändern)
@@ -4123,14 +4311,14 @@
 
         // ── Neue Orga-Notiz erstellen ──────────────────────────────────────
         function getProjectTypeFromPage() { // Projekttyp direkt aus dem Info-Panel lesen – funktioniert auch, bevor die Copy-Buttons-Daten erzeugt wurden (Domains-Panel noch zu)
-            const typElement = Array.from(document.querySelectorAll('#collapseOne .panel-body p b'))
+            const typElement = Array.from(document.querySelectorAll(`#${INFO_PANEL_ID} .panel-body p b`))
                 .find(el => ['typ', 'typ:'].includes((el.textContent || '').toLowerCase().trim()));
             if (!typElement) return '';
             return (typElement.parentElement.textContent || '').replace(/^\s*Typ\s*:?\s*/i, '').trim();
         }
 
         function openOrgaModal(newNoteBtn) {
-            const storedData = JSON.parse(localStorage.getItem(project_id) || '{}');
+            const storedData = JSON.parse(localStorage.getItem(storage_key) || '{}');
             const projectType = getProjectTypeFromPage() || (storedData.project_type || '').trim(); // zuerst live von der Seite, sonst aus den lokalen Daten
             const rows = projectType.toLowerCase() === 'medienberater zweittermin' ? ZT_ROWS : DEFAULT_ROWS;
 
@@ -4279,6 +4467,725 @@
         injectOrgaButton();
         const orgaObserver = new MutationObserver(injectOrgaButton);
         orgaObserver.observe(document.body, { childList: true, subtree: true });
+    })();
+    // ─────────────────────────────────────────────────────────────────────────
+
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // ─── Wochenstunden & Abwesenheiten ───────────────────────────────────────
+    // Zeigt auf "/dailyresults" Soll/Ist/Rest-Stunden der aktuellen Woche,
+    // einen Mini-Kalender und die Abwesenheiten aus absence.io.
+    // Urlaub / Sonderurlaub / Krank / Schule ... zählen als voller Arbeitstag
+    // (settings.absence_day_hours), "Office" / "Mobile Office" nicht (da wird
+    // ja normal gestempelt). Auf app.absence.io läuft NUR cbAbsenceSync().
+
+    // ── Helfer (function-declarations, damit sie überall im Script nutzbar sind) ──
+    function cbWhPad(n) { // 7 -> '07'
+        return (n < 10 ? '0' : '') + n;
+    }
+
+    function cbWhIso(date) { // Date -> 'YYYY-MM-DD'
+        return date.getFullYear() + '-' + cbWhPad(date.getMonth() + 1) + '-' + cbWhPad(date.getDate());
+    }
+
+    function cbWhFromIso(iso) { // 'YYYY-MM-DD' -> Date (12 Uhr, damit Sommerzeit nichts verschiebt)
+        const p = String(iso).slice(0, 10).split('-');
+        return new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]), 12, 0, 0);
+    }
+
+    function cbWhAddDays(date, days) {
+        const copy = new Date(date.getTime());
+        copy.setDate(copy.getDate() + days);
+        return copy;
+    }
+
+    function cbWhWeekInfo(date) { // Montag, Sonntag und Kalenderwoche (ISO-8601)
+        const base = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 12, 0, 0);
+        const monday = cbWhAddDays(base, -((base.getDay() + 6) % 7));
+        const thursday = cbWhAddDays(monday, 3); // die Woche gehört zum Jahr des Donnerstags
+        const firstThursday = new Date(thursday.getFullYear(), 0, 4, 12, 0, 0);
+        const firstMonday = cbWhAddDays(firstThursday, -((firstThursday.getDay() + 6) % 7));
+        const kw = Math.round((thursday - firstMonday) / 604800000) + 1;
+        return {
+            monday: monday,
+            sunday: cbWhAddDays(monday, 6),
+            kw: kw,
+            year: thursday.getFullYear(),
+            key: thursday.getFullYear() + '-KW' + cbWhPad(kw)
+        };
+    }
+
+    function cbWhFmt(minutes) { // Minuten -> '8:00' / '-1:30'
+        const abs = Math.abs(Math.round(minutes || 0));
+        return (minutes < 0 ? '-' : '') + Math.floor(abs / 60) + ':' + cbWhPad(abs % 60);
+    }
+
+    function cbWhFmtDec(hours) { // 1.5 -> '1,5'
+        return (Math.round(hours * 100) / 100).toString().replace('.', ',');
+    }
+
+    function cbWhGmSet(key, value) { // domainübergreifender Speicher (Tampermonkey), sonst localStorage
+        try {
+            if (typeof GM_setValue === 'function') { GM_setValue(key, value); return true; }
+        } catch (e) {}
+        try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) {}
+        return false;
+    }
+
+    function cbWhGmGet(key, fallback) {
+        try {
+            if (typeof GM_getValue === 'function') {
+                const value = GM_getValue(key);
+                if (value !== undefined && value !== null) return value;
+            }
+        } catch (e) {}
+        try {
+            const raw = localStorage.getItem(key);
+            if (raw) return JSON.parse(raw);
+        } catch (e) {}
+        return fallback;
+    }
+
+    function cbWhHasGm() { // ohne GM_* klappt der Datenaustausch IPSI <-> absence.io nicht
+        try { return typeof GM_setValue === 'function' && typeof GM_getValue === 'function'; } catch (e) { return false; }
+    }
+
+    function cbWhToast(text, ok) { // kleine Einblendung oben rechts
+        try {
+            const box = document.createElement('div');
+            box.textContent = 'ʕ·͡ᴥ·ʔ ' + text;
+            box.style.cssText = 'position:fixed;z-index:2147483647;top:18px;right:18px;max-width:340px;'
+                + 'padding:10px 14px;border-radius:6px;font:13px/1.45 Arial,sans-serif;color:#fff;'
+                + 'box-shadow:0 6px 18px rgba(0,0,0,.28);background:' + (ok === false ? '#c0392b' : '#27865a') + ';';
+            document.body.appendChild(box);
+            setTimeout(() => { box.style.transition = 'opacity .4s'; box.style.opacity = '0'; }, 3200);
+            setTimeout(() => box.remove(), 3700);
+        } catch (e) {}
+    }
+
+
+    // ── absence.io: Abwesenheiten des angemeldeten Nutzers holen und ablegen ──
+    // Laeuft nur auf app.absence.io (dort ist der Login-Token als Cookie da).
+    // Die Rohdaten landen per GM_setValue in "cb_absence_data", damit die
+    // IPSI-Seite sie lesen kann. Gerechnet wird erst auf der IPSI-Seite.
+    async function cbAbsenceSync(options) {
+        const opt = options || {};
+        const CACHE_KEY = 'cb_absence_data';
+        const isSyncTab = (window.name === 'cb_absence_sync'); // vom Panel geöffneter Sync-Tab
+        if (window.top !== window.self) return null; // nicht in iframes
+
+        const cached = cbWhGmGet(CACHE_KEY, null);
+        if (!isSyncTab && !opt.force && cached && cached.ts && (Date.now() - cached.ts) < 20 * 60 * 1000) {
+            return cached; // frisch genug -> absence.io nicht unnötig belasten
+        }
+
+        const cookie = (name) => {
+            const parts = ('; ' + document.cookie).split('; ' + name + '=');
+            return parts.length === 2 ? decodeURIComponent(parts.pop().split(';')[0]) : '';
+        };
+        const token = cookie('absencetoken');
+        if (!token) { // nicht (mehr) eingeloggt
+            console.log('ʕ·͡ᴥ·ʔ absence.io: kein Login gefunden, kein Sync');
+            if (isSyncTab) cbWhToast('absence.io: bitte einloggen, dann nochmal synchronisieren', false);
+            return null;
+        }
+        const headers = {
+            'Content-Type': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest',
+            'x-vacationtoken': token,
+            'x-csrf-token': cookie('__Host-csrf_token') || cookie('csrf_token'),
+            'x-languagetoken': (localStorage.getItem('lang') || 'de').replace(/["']/g, '')
+        };
+        const api = async (path, body) => {
+            const res = await fetch('https://app.absence.io/api/' + path, {
+                method: 'POST',
+                credentials: 'include',
+                headers: headers,
+                body: JSON.stringify(body)
+            });
+            if (!res.ok) throw new Error(path + ' -> HTTP ' + res.status);
+            return res.json();
+        };
+
+        try {
+            let me = null; // eigene Mail steht im localStorage von absence.io
+            try { me = JSON.parse(localStorage.getItem('user') || 'null'); } catch (e) {}
+            const userRes = await api('v2/users', { skip: 0, limit: 5, filter: me && me.email ? { email: me.email } : {} });
+            const user = (userRes.data || [])[0];
+            if (!user || !user._id) throw new Error('eigener Benutzer nicht gefunden');
+
+            const today = new Date();
+            const from = cbWhIso(cbWhAddDays(today, -180));
+            const to = cbWhIso(cbWhAddDays(today, 240));
+
+            const absRes = await api('v2/absences', {
+                skip: 0,
+                limit: 1000,
+                filter: { assignedToId: user._id, start: { '$lte': to }, end: { '$gte': from } },
+                sortBy: { startDateTime: 1, endDateTime: 1, _id: 1 },
+                responseModel: 'Calendar',
+                options: { includeDeletedReasons: true }
+            });
+
+            const days = {};
+            (absRes.data || []).forEach(entry => {
+                const reason = entry.reason || {};
+                const startIso = String(entry.start || entry.startDateTime || '').slice(0, 10);
+                if (!startIso) return;
+                const start = cbWhFromIso(startIso);
+                const endIso = String(entry.end || entry.endDateTime || '').slice(0, 10);
+                let last = endIso ? cbWhAddDays(cbWhFromIso(endIso), -1) : new Date(start.getTime()); // "end" ist exklusiv
+                if (last < start) last = new Date(start.getTime());
+
+                let workdays = 0; // für halbe Tage / Zeiträume mit Wochenende
+                for (let d = new Date(start.getTime()); d <= last; d = cbWhAddDays(d, 1)) {
+                    if (d.getDay() !== 0 && d.getDay() !== 6) workdays++;
+                }
+                const count = typeof entry.daysCount === 'number' ? entry.daysCount : workdays;
+                let ratio = workdays > 0 ? count / workdays : 1;
+                if (!isFinite(ratio) || ratio <= 0) ratio = 1;
+                if (ratio > 1) ratio = 1;
+
+                let hours = null; // stundenweise Abwesenheiten
+                if (entry.isHourly && entry.startDateTime && entry.endDateTime) {
+                    const diff = (new Date(entry.endDateTime) - new Date(entry.startDateTime)) / 3600000;
+                    if (isFinite(diff) && diff > 0) hours = Math.round(diff * 100) / 100;
+                }
+
+                for (let d = new Date(start.getTime()); d <= last; d = cbWhAddDays(d, 1)) {
+                    const key = cbWhIso(d);
+                    if (!days[key]) days[key] = [];
+                    days[key].push({
+                        reason: reason.name || 'Abwesenheit',
+                        status: entry.status, // 2 = genehmigt, 0 = offene Anfrage
+                        ratio: Math.round(ratio * 100) / 100,
+                        hours: hours,
+                        hourly: !!entry.isHourly,
+                        color: (reason.color && reason.color.colorValue) || null
+                    });
+                }
+            });
+
+            const holidays = {}; // Feiertage des eigenen Standorts
+            try {
+                const ids = user.holidayIds || [];
+                if (ids.length) {
+                    const holRes = await api('v2/holidays', { skip: 0, limit: 500, filter: { _id: { '$in': ids } } });
+                    (holRes.data || []).forEach(holiday => {
+                        (holiday.dates || []).forEach(date => {
+                            const key = String(date).slice(0, 10);
+                            if (key >= from && key <= to) holidays[key] = holiday.name || 'Feiertag';
+                        });
+                    });
+                }
+            } catch (e) { console.log('ʕ·͡ᴥ·ʔ Feiertage konnten nicht geladen werden:', e); }
+
+            const payload = {
+                ts: Date.now(),
+                from: from,
+                to: to,
+                user: { id: user._id, name: user.name || '', email: user.email || '' },
+                days: days,
+                holidays: holidays
+            };
+            cbWhGmSet(CACHE_KEY, payload);
+            console.log('ʕ·͡ᴥ·ʔ absence.io synchronisiert:', Object.keys(days).length, 'Abwesenheitstage,', Object.keys(holidays).length, 'Feiertage');
+            if (isSyncTab) {
+                cbWhToast('Abwesenheiten synchronisiert (' + Object.keys(days).length + ' Tage) - Tab schließt sich', true);
+                setTimeout(() => { try { window.close(); } catch (e) {} }, 1400);
+            }
+            return payload;
+        } catch (err) {
+            console.log('ʕ·͡ᴥ·ʔ Abwesenheits-Sync fehlgeschlagen:', err);
+            if (isSyncTab) cbWhToast('Sync fehlgeschlagen: ' + (err && err.message ? err.message : err), false);
+            return null;
+        }
+    }
+
+
+    // ── /dailyresults: Panel mit Wochenstunden, Mini-Kalender & Korrekturen ──
+    (function setupWeekHours() {
+        if (!/\/dailyresults/.test(location.pathname) || window.top !== window.self) return;
+        if (settings.week_panel === false) return;
+
+        const PANEL_ID = 'cb_wh_panel';
+        const TRACKED_KEY = 'cb_wh_tracked';    // { 'YYYY-MM-DD': Minuten } aus der Tabelle
+        const MANUAL_KEY = 'cb_wh_manual';      // { '2026-KW32': [ { h: 1.5, note: '...' } ] }
+        const TYPE_KEY = 'cb_wh_daytypes';      // { 'YYYY-MM-DD': 'urlaub' } manuelle Tages-Typen
+        const ABSENCE_KEY = 'cb_absence_data';  // von cbAbsenceSync() gefuellt
+        const DAY_LABELS = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
+
+        const DAY_TYPES = [ // manuelle Tages-Typen (Klick auf einen Tag im Mini-Kalender)
+            { id: 'auto', label: 'automatisch (absence.io)', short: '', color: '' },
+            { id: 'urlaub', label: 'Urlaub', short: 'Urlaub', color: '#3ba55d' },
+            { id: 'sonderurlaub', label: 'Sonderurlaub', short: 'Sonder', color: '#3f9c9c' },
+            { id: 'krank', label: 'Krank', short: 'Krank', color: '#d9534f' },
+            { id: 'schule', label: 'Schule / Weiterbildung', short: 'Schule', color: '#dda033' },
+            { id: 'feiertag', label: 'Feiertag', short: 'Feiertag', color: '#8a7bd8' },
+            { id: 'arbeit', label: 'normaler Arbeitstag (Abwesenheit ignorieren)', short: '', color: '#2A5298' }
+        ];
+
+        const numOr = (value, fallback) => {
+            const n = parseFloat(String(value).replace(',', '.'));
+            return isFinite(n) && n > 0 ? n : fallback;
+        };
+        const typeById = (id) => DAY_TYPES.filter(type => type.id === id)[0] || DAY_TYPES[0];
+        const esc = (text) => String(text == null ? '' : text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+        // settings werden erst kurz nach dem Seitenstart aus dem localStorage gemerged
+        // -> deshalb bei jedem Rendern frisch lesen
+        const cfg = () => ({
+            weekHours: numOr(settings.week_hours, 39),
+            dayHours: numOr(settings.absence_day_hours, 7.8),
+            workReasons: settings.absence_work_reasons || ['Office', 'Mobile Office'],
+            countHolidays: settings.absence_count_holidays !== false,
+            includePending: settings.absence_include_pending !== false,
+            mode: settings.absence_hours_mode || 'max'
+        });
+
+        const lsGet = (key, fallback) => {
+            try { const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : fallback; } catch (e) { return fallback; }
+        };
+        const lsSet = (key, value) => {
+            try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) {}
+        };
+
+        // ── Tabelle auslesen und die Ist-Zeiten dauerhaft merken ──
+        // (dadurch bleiben die Zeiten auch erhalten, wenn gefiltert oder
+        //  auf eine andere Seite der Tabelle geblaettert wird)
+        const readTable = () => {
+            const rows = document.querySelectorAll('table[id^="datagrid_table_"] tbody tr');
+            if (!rows.length) return false;
+            const seen = {};
+            rows.forEach(row => {
+                const cells = row.querySelectorAll('td');
+                if (cells.length < 8) return;
+                const date = (cells[2].textContent || '').trim().match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+                if (!date) return;
+                const iso = date[3] + '-' + date[2] + '-' + date[1];
+                const time = (cells[7].textContent || '').trim().match(/^(-?\d{1,3}):(\d{2})$/);
+                const minutes = time ? (parseInt(time[1], 10) * 60 + parseInt(time[2], 10)) : 0;
+                seen[iso] = (seen[iso] || 0) + minutes; // mehrere Zeilen an einem Tag zusammenrechnen
+            });
+            if (!Object.keys(seen).length) return false;
+            const store = lsGet(TRACKED_KEY, {});
+            Object.keys(seen).forEach(iso => { store[iso] = seen[iso]; });
+            const limit = cbWhIso(cbWhAddDays(new Date(), -200)); // alte Tage aufräumen
+            Object.keys(store).forEach(iso => { if (iso < limit) delete store[iso]; });
+            lsSet(TRACKED_KEY, store);
+            return true;
+        };
+
+
+        // ── Wochen-Berechnung ──
+        const calcWeek = () => {
+            const c = cfg();
+            const tracked = lsGet(TRACKED_KEY, {});
+            const overrides = lsGet(TYPE_KEY, {});
+            const manualAll = lsGet(MANUAL_KEY, {});
+            const absence = cbWhGmGet(ABSENCE_KEY, null);
+            const week = cbWhWeekInfo(new Date());
+            const todayIso = cbWhIso(new Date());
+            const dayMin = Math.round(c.dayHours * 60);
+            const days = [];
+            const noData = [];
+            let sum = 0;
+
+            for (let i = 0; i < 7; i++) {
+                const date = cbWhAddDays(week.monday, i);
+                const iso = cbWhIso(date);
+                const isWeekend = i > 4;
+                const day = {
+                    iso: iso, date: date, label: DAY_LABELS[i], dayNum: date.getDate(),
+                    isWeekend: isWeekend, isToday: iso === todayIso, isFuture: iso > todayIso,
+                    trackedMin: typeof tracked[iso] === 'number' ? tracked[iso] : null,
+                    override: overrides[iso] || '', creditMin: 0, chips: [], notes: [],
+                    homeoffice: false, pending: false, color: ''
+                };
+                const override = day.override && day.override !== 'auto' ? typeById(day.override) : null;
+
+                if (override && override.id !== 'arbeit') { // manuell gesetzter Abwesenheitstag
+                    day.creditMin = isWeekend ? 0 : dayMin;
+                    day.chips.push(override.short || override.label);
+                    day.color = override.color;
+                    day.notes.push(override.label + ' (manuell gesetzt)');
+                } else if (!override) { // aus absence.io
+                    const entries = (absence && absence.days && absence.days[iso]) || [];
+                    entries.forEach(entry => {
+                        const reason = String(entry.reason || '');
+                        const isWorkReason = c.workReasons.some(name => String(name).toLowerCase() === reason.toLowerCase());
+                        if (isWorkReason) { // Office / Mobile Office -> es wird normal gestempelt
+                            day.homeoffice = true;
+                            day.notes.push(reason + ' (Zeiterfassung läuft normal)');
+                            return;
+                        }
+                        if (entry.status !== 2 && !(entry.status === 0 && c.includePending)) {
+                            day.notes.push(reason + ' (nicht genehmigt, nicht gezählt)');
+                            return;
+                        }
+                        const hours = entry.hourly && entry.hours ? entry.hours : c.dayHours * (entry.ratio || 1);
+                        if (!isWeekend) day.creditMin += Math.round(hours * 60);
+                        day.chips.push(reason);
+                        day.color = day.color || entry.color || '#3ba55d';
+                        if (entry.status === 0) { day.pending = true; day.notes.push(reason + ' (offene Anfrage)'); }
+                        else day.notes.push(reason);
+                    });
+                    const holiday = absence && absence.holidays ? absence.holidays[iso] : null;
+                    if (holiday && c.countHolidays && !isWeekend && day.creditMin < dayMin) {
+                        day.creditMin = dayMin;
+                        day.chips.push('Feiertag');
+                        day.color = day.color || '#8a7bd8';
+                        day.notes.push('Feiertag: ' + holiday);
+                    }
+                } else { // 'arbeit' -> Abwesenheiten bewusst ignorieren
+                    day.notes.push('als normaler Arbeitstag gesetzt');
+                }
+                if (day.creditMin > dayMin) day.creditMin = dayMin;
+
+                const trackedMin = day.trackedMin || 0;
+                if (c.mode === 'sum') day.totalMin = trackedMin + day.creditMin;
+                else if (c.mode === 'credit') day.totalMin = day.creditMin > 0 ? day.creditMin : trackedMin;
+                else day.totalMin = Math.max(trackedMin, day.creditMin); // 'max' (Standard)
+                sum += day.totalMin;
+
+                if (!isWeekend && !day.isFuture && day.trackedMin === null && day.creditMin === 0) noData.push(day.label);
+                days.push(day);
+            }
+
+            const manual = manualAll[week.key] || [];
+            const manualMin = manual.reduce((total, item) => total + Math.round((Number(item.h) || 0) * 60), 0);
+            const targetMin = Math.round(c.weekHours * 60);
+            const doneMin = sum + manualMin;
+            const openDays = days.filter((day, index) => index < 5 && day.iso >= todayIso && day.creditMin < dayMin / 2);
+
+            return {
+                week: week, days: days, manual: manual, manualMin: manualMin,
+                targetMin: targetMin, doneMin: doneMin, restMin: targetMin - doneMin,
+                openDays: openDays.length, noData: noData, dayMin: dayMin, cfg: c,
+                absence: absence
+            };
+        };
+
+
+        // ── Styles ──
+        const CSS = ''
+            + '#cb_wh_panel{margin-bottom:18px;}'
+            + '#cb_wh_panel .panel-title{display:flex;align-items:center;gap:6px;}'
+            + '#cb_wh_panel .panel-title small{font-weight:400;color:#888;}'
+            + '#cb_wh_panel .cb_wh_sync{margin-left:auto;color:#777;text-decoration:none;font-size:13px;cursor:pointer;}'
+            + '#cb_wh_panel .cb_wh_sync:hover{color:#2A5298;}'
+            + '#cb_wh_panel .cb_wh_sync.cb_wh_spin{animation:cb_wh_rot 1s linear infinite;}'
+            + '@keyframes cb_wh_rot{to{transform:rotate(360deg);}}'
+            + '#cb_wh_panel .panel-body{padding:12px 14px;}'
+            + '#cb_wh_panel .cb_wh_rest{text-align:center;line-height:1.1;margin-bottom:8px;}'
+            + '#cb_wh_panel .cb_wh_rest b{display:block;font-size:30px;font-weight:700;color:#2A5298;}'
+            + '#cb_wh_panel .cb_wh_rest.cb_wh_done b{color:#3ba55d;}'
+            + '#cb_wh_panel .cb_wh_rest span{font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.04em;}'
+            + '#cb_wh_panel .cb_wh_bar{height:7px;border-radius:4px;background:#e6e8ec;overflow:hidden;margin:8px 0 6px;}'
+            + '#cb_wh_panel .cb_wh_bar i{display:block;height:100%;background:#2A5298;transition:width .3s;}'
+            + '#cb_wh_panel .cb_wh_bar.cb_wh_over i{background:#3ba55d;}'
+            + '#cb_wh_panel .cb_wh_kpis{display:flex;justify-content:space-between;font-size:11px;color:#777;margin-bottom:10px;}'
+            + '#cb_wh_panel .cb_wh_kpis b{display:block;font-size:13px;color:#333;}'
+            + '#cb_wh_panel .cb_wh_cal{display:flex;gap:3px;margin:0 0 10px;}'
+            + '#cb_wh_panel .cb_wh_day{flex:1 1 0;min-width:0;border:1px solid #dfe2e7;border-radius:4px;padding:3px 1px 4px;text-align:center;cursor:pointer;background:#fff;position:relative;}'
+            + '#cb_wh_panel .cb_wh_day:hover{border-color:#2A5298;}'
+            + '#cb_wh_panel .cb_wh_day.cb_wh_we{background:#f5f6f8;color:#aaa;}'
+            + '#cb_wh_panel .cb_wh_day.cb_wh_today{border-color:#2A5298;box-shadow:0 0 0 1px #2A5298 inset;}'
+            + '#cb_wh_panel .cb_wh_day.cb_wh_future{opacity:.65;}'
+            + '#cb_wh_panel .cb_wh_dow{display:block;font-size:10px;text-transform:uppercase;color:#999;}'
+            + '#cb_wh_panel .cb_wh_num{display:block;font-size:11px;color:#bbb;line-height:1;}'
+            + '#cb_wh_panel .cb_wh_val{display:block;font-size:12px;font-weight:700;color:#333;margin-top:2px;}'
+            + '#cb_wh_panel .cb_wh_day.cb_wh_abs .cb_wh_val{color:#fff;}'
+            + '#cb_wh_panel .cb_wh_day.cb_wh_abs{color:#fff;border-color:transparent;}'
+            + '#cb_wh_panel .cb_wh_day.cb_wh_abs .cb_wh_dow,#cb_wh_panel .cb_wh_day.cb_wh_abs .cb_wh_num{color:rgba(255,255,255,.85);}'
+            + '#cb_wh_panel .cb_wh_chip{display:block;font-size:9px;line-height:1.2;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}'
+            + '#cb_wh_panel .cb_wh_ho{position:absolute;top:1px;right:2px;font-size:9px;opacity:.7;}'
+            + '#cb_wh_panel .cb_wh_pend{position:absolute;top:1px;left:2px;font-size:9px;}'
+            + '#cb_wh_panel .cb_wh_manual{border-top:1px solid #eceef1;padding-top:8px;}'
+            + '#cb_wh_panel .cb_wh_mhead{display:flex;justify-content:space-between;font-size:11px;color:#777;text-transform:uppercase;letter-spacing:.03em;margin-bottom:5px;}'
+            + '#cb_wh_panel .cb_wh_mhead b{color:#333;}'
+            + '#cb_wh_panel .cb_wh_add{display:flex;gap:4px;align-items:center;}'
+            + '#cb_wh_panel .cb_wh_add input{height:26px;padding:2px 6px;font-size:12px;}'
+            + '#cb_wh_panel .cb_wh_add .cb_wh_h{width:52px;text-align:center;flex:0 0 52px;}'
+            + '#cb_wh_panel .cb_wh_add .cb_wh_note{flex:1 1 auto;min-width:0;}'
+            + '#cb_wh_panel .cb_wh_add button{padding:1px 8px;font-size:14px;line-height:1.4;}'
+            + '#cb_wh_panel .cb_wh_list{list-style:none;margin:6px 0 0;padding:0;font-size:11px;}'
+            + '#cb_wh_panel .cb_wh_list li{display:flex;gap:5px;align-items:center;padding:1px 0;color:#666;}'
+            + '#cb_wh_panel .cb_wh_list li b{color:#333;flex:0 0 auto;}'
+            + '#cb_wh_panel .cb_wh_list li em{flex:1 1 auto;font-style:normal;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}'
+            + '#cb_wh_panel .cb_wh_del{color:#c0392b;cursor:pointer;opacity:.6;font-size:10px;}'
+            + '#cb_wh_panel .cb_wh_del:hover{opacity:1;}'
+            + '.cb_wh_menu{position:absolute;z-index:2147483000;background:#fff;border:1px solid #ccd0d6;border-radius:4px;box-shadow:0 6px 18px rgba(0,0,0,.18);padding:4px 0;font:12px/1.5 Arial,sans-serif;min-width:210px;}'
+            + '.cb_wh_menu b{display:block;padding:3px 12px 5px;color:#888;font-size:10px;text-transform:uppercase;}'
+            + '.cb_wh_menu a{display:flex;align-items:center;gap:7px;padding:4px 12px;color:#333;text-decoration:none;cursor:pointer;}'
+            + '.cb_wh_menu a:hover{background:#eef2f9;}'
+            + '.cb_wh_menu a i{width:9px;height:9px;border-radius:50%;display:inline-block;border:1px solid rgba(0,0,0,.15);}'
+            + '.cb_wh_menu a.cb_wh_act{font-weight:700;}';
+
+        const injectCss = () => {
+            if (document.getElementById('cb_wh_css')) return;
+            const style = document.createElement('style');
+            style.id = 'cb_wh_css';
+            style.textContent = CSS;
+            document.head.appendChild(style);
+        };
+
+
+        // ── Mini-Kalender der aktuellen Woche ──
+        const calHtml = (data) => data.days.map(day => {
+            const classes = ['cb_wh_day'];
+            if (day.isWeekend) classes.push('cb_wh_we');
+            if (day.isToday) classes.push('cb_wh_today');
+            if (day.isFuture) classes.push('cb_wh_future');
+            if (day.chips.length) classes.push('cb_wh_abs');
+            const value = day.totalMin > 0 ? cbWhFmt(day.totalMin) : (day.trackedMin === null ? '–' : '0:00');
+            const title = [day.label + ', ' + day.iso.split('-').reverse().join('.')]
+                .concat(day.trackedMin === null ? ['keine Zeiterfassung vorhanden'] : ['gestempelt: ' + cbWhFmt(day.trackedMin)])
+                .concat(day.creditMin > 0 ? ['angerechnet: ' + cbWhFmt(day.creditMin)] : [])
+                .concat(day.notes)
+                .concat(['', 'Klick: Tag manuell setzen'])
+                .join('\n');
+            return '<div class="' + classes.join(' ') + '" data-iso="' + day.iso + '"'
+                + (day.chips.length && day.color ? ' style="background:' + esc(day.color) + '"' : '')
+                + ' title="' + esc(title) + '">'
+                + (day.homeoffice ? '<span class="cb_wh_ho" title="Office / Mobile Office">⌂</span>' : '')
+                + (day.pending ? '<span class="cb_wh_pend" title="offene Anfrage">•</span>' : '')
+                + '<span class="cb_wh_dow">' + day.label + '</span>'
+                + '<span class="cb_wh_num">' + day.dayNum + '.</span>'
+                + '<span class="cb_wh_val">' + value + '</span>'
+                + (day.chips.length ? '<span class="cb_wh_chip">' + esc(day.chips[0]) + '</span>' : '')
+                + '</div>';
+        }).join('');
+
+        // ── Panel-Inhalt zeichnen ──
+        const render = () => {
+            const panel = document.getElementById(PANEL_ID);
+            if (!panel) return;
+            const data = calcWeek();
+            const percent = data.targetMin > 0 ? Math.max(0, Math.min(100, Math.round(data.doneMin / data.targetMin * 100))) : 0;
+            const restDone = data.restMin <= 0;
+            const perDay = (!restDone && data.openDays > 0) ? cbWhFmt(data.restMin / data.openDays) : '–';
+            const age = data.absence && data.absence.ts ? Math.round((Date.now() - data.absence.ts) / 60000) : null;
+
+            const heading = panel.querySelector('.cb_wh_kw');
+            if (heading) heading.textContent = 'KW ' + data.week.kw + ' · ' + cbWhIso(data.week.monday).split('-').reverse().slice(0, 2).join('.')
+                + '–' + cbWhIso(cbWhAddDays(data.week.monday, 4)).split('-').reverse().slice(0, 2).join('.');
+
+            const icon = panel.querySelector('.cb_wh_sync'); // Infos stecken im Tooltip des Sync-Icons
+            if (icon) {
+                const when = age === null ? 'noch nicht geladen'
+                    : (age < 1 ? 'gerade eben' : (age < 60 ? 'vor ' + age + ' Min.' : 'vor ' + Math.round(age / 60) + ' Std.'));
+                icon.setAttribute('title', !cbWhHasGm()
+                    ? 'Für die Übernahme aus absence.io werden @grant GM_setValue und GM_getValue gebraucht'
+                    : 'Abwesenheiten aus absence.io holen (Stand: ' + when + ')'
+                        + (data.absence && data.absence.user && data.absence.user.name ? ' – ' + data.absence.user.name : '')
+                        + (data.noData.length ? '\nKeine Tabellen-Zeilen für ' + data.noData.join(', ') + ' – als 0:00 gerechnet' : ''));
+            }
+
+            panel.querySelector('.panel-body').innerHTML = ''
+                + '<div class="cb_wh_rest' + (restDone ? ' cb_wh_done' : '') + '">'
+                +     '<b>' + (restDone ? '+' + cbWhFmt(-data.restMin) : cbWhFmt(data.restMin)) + '</b>'
+                +     '<span>' + (restDone ? 'Stunden über dem Soll' : 'Stunden noch offen') + '</span>'
+                + '</div>'
+                + '<div class="cb_wh_bar' + (restDone ? ' cb_wh_over' : '') + '"><i style="width:' + percent + '%"></i></div>'
+                + '<div class="cb_wh_kpis">'
+                +     '<span title="Wochen-Soll">Soll<b>' + cbWhFmt(data.targetMin) + '</b></span>'
+                +     '<span title="Gestempelt + angerechnete Abwesenheiten + manuelle Korrekturen">Ist<b>' + cbWhFmt(data.doneMin) + '</b></span>'
+                +     '<span title="Rest verteilt auf die verbleibenden Arbeitstage (' + data.openDays + ')">&#216; / Tag<b>' + perDay + '</b></span>'
+                + '</div>'
+                + '<div class="cb_wh_cal">' + calHtml(data) + '</div>'
+                + '<div class="cb_wh_manual">'
+                +     '<div class="cb_wh_mhead"><span>Manuelle Korrektur</span><b>'
+                +         (data.manualMin >= 0 ? '+' : '') + cbWhFmt(data.manualMin) + '</b></div>'
+                +     '<div class="cb_wh_add">'
+                +         '<input type="text" class="form-control cb_wh_h" placeholder="1,5" title="Stunden (z.B. 1,5 oder 0:30)">'
+                +         '<input type="text" class="form-control cb_wh_note" placeholder="Notiz (optional)">'
+                +         '<button type="button" class="btn btn-default cb_wh_minus" title="Stunden abziehen">&#8722;</button>'
+                +         '<button type="button" class="btn btn-default cb_wh_plus" title="Stunden hinzufügen">+</button>'
+                +     '</div>'
+                +     (data.manual.length ? '<ul class="cb_wh_list">' + data.manual.map((item, index) => '<li>'
+                            + '<b>' + ((Number(item.h) || 0) >= 0 ? '+' : '') + cbWhFmt((Number(item.h) || 0) * 60) + '</b>'
+                            + '<em>' + esc(item.note || 'Korrektur') + '</em>'
+                            + '<a class="cb_wh_del glyphicon glyphicon-remove" data-index="' + index + '" title="entfernen"></a>'
+                            + '</li>').join('') + '</ul>' : '')
+                + '</div>';
+
+            bindEvents(panel, data);
+        };
+
+
+        // ── Eingabe "1,5" / "0:30" / "-2" in Stunden umwandeln ──
+        const parseHours = (text) => {
+            const raw = String(text || '').trim().replace(',', '.');
+            if (!raw) return null;
+            const time = raw.match(/^(-?)(\d{1,3}):(\d{2})$/);
+            if (time) {
+                const value = parseInt(time[2], 10) + parseInt(time[3], 10) / 60;
+                return time[1] === '-' ? -value : value;
+            }
+            const number = parseFloat(raw);
+            return isFinite(number) ? number : null;
+        };
+
+        // ── manuelle Korrektur speichern (pro Kalenderwoche) ──
+        const addManual = (hours) => {
+            const panel = document.getElementById(PANEL_ID);
+            const noteInput = panel ? panel.querySelector('.cb_wh_note') : null;
+            const week = cbWhWeekInfo(new Date());
+            const store = lsGet(MANUAL_KEY, {});
+            const list = store[week.key] || [];
+            list.push({ h: Math.round(hours * 100) / 100, note: noteInput ? noteInput.value.trim() : '', ts: Date.now() });
+            store[week.key] = list;
+            const keys = Object.keys(store).sort();
+            while (keys.length > 12) { delete store[keys.shift()]; } // nur die letzten 12 Wochen behalten
+            lsSet(MANUAL_KEY, store);
+            render();
+        };
+
+        // ── Tages-Typ manuell setzen (Klick auf einen Tag) ──
+        const openDayMenu = (cell) => {
+            document.querySelectorAll('.cb_wh_menu').forEach(old => old.remove());
+            const iso = cell.getAttribute('data-iso');
+            const current = lsGet(TYPE_KEY, {})[iso] || 'auto';
+            const menu = document.createElement('div');
+            menu.className = 'cb_wh_menu';
+            menu.innerHTML = '<b>' + iso.split('-').reverse().join('.') + '</b>'
+                + DAY_TYPES.map(type => '<a data-type="' + type.id + '" class="' + (type.id === current ? 'cb_wh_act' : '') + '">'
+                    + '<i style="background:' + (type.color || 'transparent') + '"></i>' + esc(type.label) + '</a>').join('');
+            document.body.appendChild(menu);
+            const box = cell.getBoundingClientRect();
+            menu.style.top = (window.scrollY + box.bottom + 4) + 'px';
+            menu.style.left = Math.max(6, Math.min(window.scrollX + box.left,
+                window.scrollX + document.documentElement.clientWidth - menu.offsetWidth - 10)) + 'px';
+            menu.querySelectorAll('a').forEach(link => link.addEventListener('click', () => {
+                const type = link.getAttribute('data-type');
+                const store = lsGet(TYPE_KEY, {});
+                if (type === 'auto') delete store[iso]; else store[iso] = type;
+                const limit = cbWhIso(cbWhAddDays(new Date(), -200));
+                Object.keys(store).forEach(key => { if (key < limit) delete store[key]; });
+                lsSet(TYPE_KEY, store);
+                menu.remove();
+                render();
+            }));
+            setTimeout(() => { // erst danach lauschen, sonst schließt der eigene Klick das Menü direkt
+                const close = (event) => {
+                    if (!menu.contains(event.target)) { menu.remove(); document.removeEventListener('click', close); }
+                };
+                document.addEventListener('click', close);
+            }, 0);
+        };
+
+        // ── Sync-Tab für absence.io öffnen und auf neue Daten warten ──
+        let syncTimer = null;
+        const startSync = () => {
+            if (!cbWhHasGm()) {
+                cbWhToast('Dafür werden im Script-Header @grant GM_setValue und GM_getValue gebraucht', false);
+                return;
+            }
+            const icon = document.querySelector('#' + PANEL_ID + ' .cb_wh_sync');
+            if (icon) icon.classList.add('cb_wh_spin');
+            const before = (cbWhGmGet(ABSENCE_KEY, null) || {}).ts || 0;
+            window.open('https://app.absence.io/#/mycalendar', 'cb_absence_sync'); // schließt sich selbst wieder
+            let tries = 0;
+            clearInterval(syncTimer);
+            syncTimer = setInterval(() => {
+                tries++;
+                const now = (cbWhGmGet(ABSENCE_KEY, null) || {}).ts || 0;
+                if (now > before) {
+                    clearInterval(syncTimer);
+                    if (icon) icon.classList.remove('cb_wh_spin');
+                    render();
+                    cbWhToast('Abwesenheiten aktualisiert', true);
+                } else if (tries > 30) {
+                    clearInterval(syncTimer);
+                    if (icon) icon.classList.remove('cb_wh_spin');
+                    cbWhToast('Keine neuen Daten - ist der absence.io-Login noch aktiv?', false);
+                }
+            }, 1000);
+        };
+
+        // ── Events an das gerenderte Panel hängen ──
+        const bindEvents = (panel) => {
+            panel.querySelectorAll('.cb_wh_day').forEach(cell => {
+                cell.addEventListener('click', event => { event.preventDefault(); openDayMenu(cell); });
+            });
+            const hoursInput = panel.querySelector('.cb_wh_h');
+            const submit = (sign) => {
+                const value = parseHours(hoursInput.value);
+                if (value === null || value === 0) { cbWhToast('Bitte Stunden angeben, z.B. 1,5 oder 0:30', false); return; }
+                addManual(sign * Math.abs(value));
+            };
+            panel.querySelector('.cb_wh_plus').addEventListener('click', () => submit(1));
+            panel.querySelector('.cb_wh_minus').addEventListener('click', () => submit(-1));
+            [hoursInput, panel.querySelector('.cb_wh_note')].forEach(input => {
+                input.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); submit(1); } });
+            });
+            panel.querySelectorAll('.cb_wh_del').forEach(link => link.addEventListener('click', () => {
+                const week = cbWhWeekInfo(new Date());
+                const store = lsGet(MANUAL_KEY, {});
+                const list = store[week.key] || [];
+                list.splice(parseInt(link.getAttribute('data-index'), 10), 1);
+                store[week.key] = list;
+                lsSet(MANUAL_KEY, store);
+                render();
+            }));
+        };
+
+
+        // ── Panel in die Filter-Spalte hängen ──
+        const buildPanel = () => {
+            if (document.getElementById(PANEL_ID)) return true;
+            const table = document.querySelector('table[id^="datagrid_table_"]');
+            const row = table ? table.closest('.row') : null;
+            const column = row ? row.querySelector('.col-md-3') : null;
+            const fallback = document.querySelector('#list') || document.querySelector('.container');
+            if (!column && !fallback) return false;
+            injectCss();
+            const panel = document.createElement('div');
+            panel.id = PANEL_ID;
+            panel.className = 'panel panel-default';
+            if (!column) panel.style.maxWidth = '360px';
+            panel.innerHTML = '<div class="panel-heading"><h3 class="panel-title">Arbeitsstunden'
+                + '<small class="cb_wh_kw"></small>'
+                + '<a class="cb_wh_sync glyphicon glyphicon-refresh" title="Abwesenheiten aus absence.io holen"></a>'
+                + '</h3></div><div class="panel-body"></div>';
+            const target = column || fallback;
+            target.insertBefore(panel, target.firstChild);
+            panel.querySelector('.cb_wh_sync').addEventListener('click', () => startSync());
+            return true;
+        };
+
+        const refresh = () => { readTable(); render(); };
+
+        // ── Start: Panel aufbauen, bei AJAX-Updates der Tabelle neu rechnen ──
+        let ready = buildPanel();
+        if (ready) refresh();
+        let debounce = null;
+        const observer = new MutationObserver(mutations => {
+            const panel = document.getElementById(PANEL_ID);
+            const outside = mutations.some(entry => !(panel && (panel === entry.target || panel.contains(entry.target))));
+            if (!outside) return; // eigene Renderings ignorieren
+            if (!ready) { ready = buildPanel(); if (ready) refresh(); return; }
+            clearTimeout(debounce);
+            debounce = setTimeout(refresh, 250);
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+
+        setTimeout(refresh, 1200); // die settings kommen erst kurz nach dem Start aus dem localStorage
+        setTimeout(refresh, 3000);
+
+        try { // andere Tabs (z.B. der Sync-Tab) melden neue Abwesenheiten
+            if (typeof GM_addValueChangeListener === 'function') {
+                GM_addValueChangeListener(ABSENCE_KEY, () => render());
+            }
+        } catch (e) {}
+
+        if (settings.absence_auto_sync) { // optional: Abwesenheiten selbst nachladen
+            setTimeout(() => {
+                const cached = cbWhGmGet(ABSENCE_KEY, null);
+                if (cbWhHasGm() && (!cached || (Date.now() - (cached.ts || 0)) > 12 * 3600000)) startSync();
+            }, 2500);
+        }
     })();
     // ─────────────────────────────────────────────────────────────────────────
 

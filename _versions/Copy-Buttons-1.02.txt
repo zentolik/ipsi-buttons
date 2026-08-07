@@ -5155,21 +5155,29 @@
             return true;
         };
 
-        const refresh = () => { readTable(); render(); };
+        const refresh = () => {
+            if (!buildPanel()) return; // Panel (noch) nicht baubar -> naechster Versuch
+            readTable();
+            render();
+        };
 
         // ── Start: Panel aufbauen, bei AJAX-Updates der Tabelle neu rechnen ──
-        let ready = buildPanel();
-        if (ready) refresh();
+        refresh();
         let debounce = null;
+        const schedule = (delay) => { clearTimeout(debounce); debounce = setTimeout(refresh, delay); };
+
         const observer = new MutationObserver(mutations => {
             const panel = document.getElementById(PANEL_ID);
-            const outside = mutations.some(entry => !(panel && (panel === entry.target || panel.contains(entry.target))));
+            // Soft-Reload (z.B. dailyResultModal auf/zu) ersetzt die Spalte und wirft das Panel raus
+            if (!panel || !panel.isConnected) { schedule(50); return; }
+            const outside = mutations.some(entry => !(panel === entry.target || panel.contains(entry.target)));
             if (!outside) return; // eigene Renderings ignorieren
-            if (!ready) { ready = buildPanel(); if (ready) refresh(); return; }
-            clearTimeout(debounce);
-            debounce = setTimeout(refresh, 250);
+            schedule(250);
         });
         observer.observe(document.body, { childList: true, subtree: true });
+
+        // Sicherheitsnetz: falls nach einem Soft-Reload keine Mutationen mehr folgen
+        setInterval(() => { if (!document.getElementById(PANEL_ID)) refresh(); }, 1500);
 
         setTimeout(refresh, 1200); // die settings kommen erst kurz nach dem Start aus dem localStorage
         setTimeout(refresh, 3000);

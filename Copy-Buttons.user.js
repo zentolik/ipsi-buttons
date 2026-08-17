@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Copy-Buttons
 // @namespace    https://github.com/zentolik
-// @version      1.02
+// @version      1.03
 // @description  doing stuff ʕ·͡ᴥ·ʔ
 // @author       Zentolik
 // @match        https://ipsi.securewebsystems.net/project/detailed/*
@@ -18,7 +18,7 @@
 
 !(function() { // ʕ·͡ᴥ·ʔ hi & ty <3
     'use strict';
-    const SCRIPT_VERSION = '1.02';
+    const SCRIPT_VERSION = '1.03';
     console.log(`ʕ·͡ᴥ·ʔ *bup* v${SCRIPT_VERSION}`);
     let settings = {
         button_position: true, // ändert die position vom btn (wenn auf "false", empfähle ich "copy_icon" zu aktivieren") //
@@ -54,6 +54,8 @@
         absence_include_pending: true, // noch nicht genehmigte Abwesenheiten mitzählen //
         absence_hours_mode: 'max', // 'max' = gestempelte oder angerechnete Zeit (das Höhere) / 'sum' = beides addieren / 'credit' = an Abwesenheitstagen nur die Gutschrift //
         absence_auto_sync: false, // absence.io automatisch in einem Hintergrund-Tab abfragen, wenn die Daten älter als 12 Std. sind //
+        week_view: 'week', // Mini-Kalender im Wochenstunden-Panel: 'week' (aktuelle Woche) oder 'month' (ganzer Monat) – umschaltbar über das Zahnrad im Panel //
+        week_hours_scope: 'week', // Soll-/Offen-Anzeige: 'week' / 'month' (ganzer Monat) / 'both' (Woche groß, Monat klein) – umschaltbar über das Zahnrad im Panel //
     };
 
     const saveSettings = (newSettings) => { // Settings speichern – auch außerhalb des Settings-Popups nutzbar //
@@ -212,6 +214,82 @@
       }, 300);
       setTimeout(() => clearInterval(timer), 30000);
     };
+
+    // ── Pfad-Button direkt nach dem Anlegen eines DFS ────────────────
+    // Klickt man im Popup "DFS erstellen: <domain>" (öffnet sich über den
+    // "DFS erstellen"-Button im Domains-Panel) auf den grünen
+    // "DFS erstellen"-Button, steht der Speicherort bereits fest.
+    // Der Pfad-Button (#copyPath) wird deshalb sofort mit dem passenden Pfad
+    // erzeugt – ohne Reload und ohne auf die DFS-API zu warten.
+
+    const dfsCreateModal = (element) => { // das geöffnete "DFS erstellen"-Popup zum angeklickten Element
+        const modal = element?.closest?.('.modal, [role="dialog"]');
+        if (!modal) return null;
+        const title = (modal.querySelector('.modal-title, .modal-header h4, .modal-header h3')?.textContent || '').toLowerCase();
+        return title.includes('dfs erstellen') ? modal : null; // nur das Anlege-Popup, keine anderen Dialoge
+    };
+
+    const dfsServerRow = (modal) => // die Tabellenzeile "Server:" im Popup
+        Array.from(modal.querySelectorAll('tr')).find(row => (row.querySelector('td, th')?.textContent || '').toLowerCase().trim().startsWith('server:')) || null;
+
+    const dfsEdoName = (value) => { // "1113-dfs5" bzw. "Nidhogg (58 Websites)" → "nidhogg"
+        const byId = DFS_DEPARTMENTS[String(value || '').split('-')[0]] || '';
+        return (byId || String(value || '').split('(')[0]).toLowerCase().trim();
+    };
+
+    const dfsSelectedEdo = (modal) => { // der im Popup ausgewählte Speicherort
+        const row = dfsServerRow(modal);
+        const select = row?.querySelector('select')
+            || Array.from(modal.querySelectorAll('select')).find(sel => Array.from(sel.options).some(option => /-dfs\d/i.test(option.value))); // Fallback, falls die Zeile mal anders heißt
+        const selected = select?.options?.[select.selectedIndex];
+        if (select?.value) return dfsEdoName(select.value) || dfsEdoName(selected?.textContent);
+        if (selected?.textContent?.trim()) return dfsEdoName(selected.textContent);
+        return dfsEdoName(row?.children?.[1]?.textContent); // nichts umgestellt → Speicherort wie auf LIVE
+    };
+
+    const rebuildCopyButtons = () => { // Buttons neu aufbauen (Reihenfolge: Pfad vor Kundendaten)
+        const storedObject = JSON.parse(localStorage.getItem(storage_key) || 'null');
+        if (!storedObject) return false;
+        createButtonContainer();
+        document.querySelector('#copyPath')?.remove();
+        document.querySelector('#copyClientdata')?.remove();
+        if (edoList.includes(storedObject.edo)) createCopyButton(false, false, false, 'copyPath'); // ohne DFS-Speicherort keinen Pfad-Button
+        createCopyButton(false, false, false, 'copyClientdata');
+        return true;
+    };
+
+    const applyDfsEdo = (edoName) => { // neuen Speicherort übernehmen und die Buttons erneuern
+        const storedObject = JSON.parse(localStorage.getItem(storage_key) || 'null');
+        if (!storedObject) return false; // Projektdaten werden noch eingesammelt → später erneut versuchen
+        edo = edoName;
+        localStorage.setItem(storage_key, JSON.stringify({ ...storedObject, edo: edoName }));
+        dfsLookup.state = 'done'; // die API-Antwort darf den frisch angelegten Speicherort nicht mehr überschreiben
+        dfsLookup.edo = edoName;
+        return rebuildCopyButtons();
+    };
+
+    let dfsPendingEdo = ''; // zuletzt im Popup angelegter Speicherort
+    const applyDfsEdoWhenReady = (edoName) => { // ggf. warten, bis die Projektdaten im lokalen Speicher stehen
+        dfsPendingEdo = edoName;
+        if (applyDfsEdo(edoName)) return;
+        const timer = setInterval(() => {
+            if (dfsPendingEdo !== edoName || applyDfsEdo(edoName)) clearInterval(timer);
+        }, 300);
+        setTimeout(() => clearInterval(timer), 30000); // Notbremse
+    };
+
+    document.addEventListener('click', (event) => { // Klick auf "DFS erstellen" IM Popup (nicht auf den Button im Panel)
+        const button = event.target?.closest?.('button');
+        if (!button) return;
+        const label = (button.textContent || '').toLowerCase().trim();
+        if (label.includes('abbrechen') || (!label.includes('dfs erstellen') && !button.classList.contains('btn-success'))) return;
+        const modal = dfsCreateModal(button);
+        if (!modal) return;
+        const edoName = dfsSelectedEdo(modal);
+        if (!edoName) return;
+        if (!edoList.includes(edoName)) return showNotification('Kein EDO-Pfad für "' + edoName + '"', 'warning'); // z.B. Plovdiv steht nicht in der edoList
+        applyDfsEdoWhenReady(edoName);
+    }, true);
 
     // ── Projektdaten automatisch beim Seitenaufruf einsammeln ────────
     // Öffnet die dafür nötigen Panels (Domains-Panel & Projekt-Infos) unsichtbar,
@@ -1629,7 +1707,7 @@
                     <span class="cb_side_close_btn glyphicon glyphicon-remove" title="Übersicht schließen"></span>
                     <span class="settings_title">Projekte</span>
                     <div class="cb_ls_sort">
-                        <label for="cb_ls_sort_select">Sortieren nach</label>
+                        <label for="cb_ls_sort_select">Sortieren</label>
                         <select id="cb_ls_sort_select" title="Projekte hiernach sortieren – dieser Wert wird im Label vor dem Projektlink angezeigt">
                             <option value="project_id">Projekt-ID</option>
                             <option value="client_id">Kunden-ID</option>
@@ -4777,103 +4855,202 @@
         };
 
 
-        // ── Wochen-Berechnung ──
-        const calcWeek = () => {
-            const c = cfg();
-            const tracked = lsGet(TRACKED_KEY, {});
-            const overrides = lsGet(TYPE_KEY, {});
-            const manualAll = lsGet(MANUAL_KEY, {});
-            const absence = cbWhGmGet(ABSENCE_KEY, null);
-            const week = cbWhWeekInfo(new Date());
-            const todayIso = cbWhIso(new Date());
-            const dayMin = Math.round(c.dayHours * 60);
-            const days = [];
-            const noData = [];
-            let sum = 0;
+        // ── Wochen-/Monats-Berechnung ──
+        const NL = String.fromCharCode(10); // Zeilenumbruch für die Tooltips
+        const MONTH_NAMES = ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni',
+            'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'];
 
-            for (let i = 0; i < 7; i++) {
-                const date = cbWhAddDays(week.monday, i);
-                const iso = cbWhIso(date);
-                const isWeekend = i > 4;
-                const day = {
-                    iso: iso, date: date, label: DAY_LABELS[i], dayNum: date.getDate(),
-                    isWeekend: isWeekend, isToday: iso === todayIso, isFuture: iso > todayIso,
-                    trackedMin: typeof tracked[iso] === 'number' ? tracked[iso] : null,
-                    override: overrides[iso] || '', creditMin: 0, chips: [], notes: [],
-                    homeoffice: false, pending: false, color: ''
-                };
-                const override = day.override && day.override !== 'auto' ? typeById(day.override) : null;
+        // Anzeige-Modi (Zahnrad im Panel-Kopf)
+        const VIEW_OPTIONS = [
+            { id: 'week', label: 'Wochen-Übersicht' },
+            { id: 'month', label: 'Monats-Übersicht' }
+        ];
+        const SCOPE_OPTIONS = [
+            { id: 'week', label: 'nur Woche' },
+            { id: 'month', label: 'nur Monat' },
+            { id: 'both', label: 'beide (Woche groß, Monat klein)' }
+        ];
+        const viewMode = () => settings.week_view === 'month' ? 'month' : 'week';
+        const scopeMode = () => (settings.week_hours_scope === 'month' || settings.week_hours_scope === 'both')
+            ? settings.week_hours_scope : 'week';
 
-                if (override && override.id !== 'arbeit') { // manuell gesetzter Abwesenheitstag
-                    day.creditMin = isWeekend ? 0 : dayMin;
-                    day.chips.push(override.short || override.label);
-                    day.color = override.color;
-                    day.notes.push(override.label + ' (manuell gesetzt)');
-                } else if (!override) { // aus absence.io
-                    const entries = (absence && absence.days && absence.days[iso]) || [];
-                    entries.forEach(entry => {
-                        const reason = String(entry.reason || '');
-                        const isWorkReason = c.workReasons.some(name => String(name).toLowerCase() === reason.toLowerCase());
-                        if (isWorkReason) { // Office / Mobile Office -> es wird normal gestempelt
-                            day.homeoffice = true;
-                            day.notes.push(reason + ' (Zeiterfassung läuft normal)');
-                            return;
-                        }
-                        if (entry.status !== 2 && !(entry.status === 0 && c.includePending)) {
-                            day.notes.push(reason + ' (nicht genehmigt, nicht gezählt)');
-                            return;
-                        }
-                        const hours = entry.hourly && entry.hours ? entry.hours : c.dayHours * (entry.ratio || 1);
-                        if (!isWeekend) day.creditMin += Math.round(hours * 60);
-                        day.chips.push(reason);
-                        day.color = day.color || entry.color || '#3ba55d';
-                        if (entry.status === 0) { day.pending = true; day.notes.push(reason + ' (offene Anfrage)'); }
-                        else day.notes.push(reason);
-                    });
-                    const holiday = absence && absence.holidays ? absence.holidays[iso] : null;
-                    if (holiday && c.countHolidays && !isWeekend && day.creditMin < dayMin) {
-                        day.creditMin = dayMin;
-                        day.chips.push('Feiertag');
-                        day.color = day.color || '#8a7bd8';
-                        day.notes.push('Feiertag: ' + holiday);
-                    }
-                } else { // 'arbeit' -> Abwesenheiten bewusst ignorieren
-                    day.notes.push('als normaler Arbeitstag gesetzt');
-                }
-                if (day.creditMin > dayMin) day.creditMin = dayMin;
-
-                const trackedMin = day.trackedMin || 0;
-                if (c.mode === 'sum') day.totalMin = trackedMin + day.creditMin;
-                else if (c.mode === 'credit') day.totalMin = day.creditMin > 0 ? day.creditMin : trackedMin;
-                else day.totalMin = Math.max(trackedMin, day.creditMin); // 'max' (Standard)
-                sum += day.totalMin;
-
-                if (!isWeekend && !day.isFuture && day.trackedMin === null && day.creditMin === 0) noData.push(day.label);
-                days.push(day);
+        const monthInfo = (date) => { // erster/letzter Tag, Arbeitstage und Label des Monats
+            const first = new Date(date.getFullYear(), date.getMonth(), 1, 12, 0, 0);
+            const dayCount = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+            let workdays = 0;
+            for (let i = 0; i < dayCount; i++) {
+                const dow = cbWhAddDays(first, i).getDay();
+                if (dow !== 0 && dow !== 6) workdays++;
             }
-
-            const manual = manualAll[week.key] || [];
-            const manualMin = manual.reduce((total, item) => total + Math.round((Number(item.h) || 0) * 60), 0);
-            const targetMin = Math.round(c.weekHours * 60);
-            const doneMin = sum + manualMin;
-            const openDays = days.filter((day, index) => index < 5 && day.iso >= todayIso && day.creditMin < dayMin / 2);
-
             return {
-                week: week, days: days, manual: manual, manualMin: manualMin,
-                targetMin: targetMin, doneMin: doneMin, restMin: targetMin - doneMin,
-                openDays: openDays.length, noData: noData, dayMin: dayMin, cfg: c,
-                absence: absence
+                first: first, last: cbWhAddDays(first, dayCount - 1), dayCount: dayCount,
+                workdays: workdays, month: first.getMonth(), year: first.getFullYear(),
+                label: MONTH_NAMES[first.getMonth()] + ' ' + first.getFullYear(),
+                key: first.getFullYear() + '-' + cbWhPad(first.getMonth() + 1)
             };
         };
 
+        const mondayOfWeekKey = (key) => { // '2026-KW32' -> Montag dieser Woche (ISO-8601)
+            const parts = String(key || '').split('-KW');
+            if (parts.length !== 2) return null;
+            const year = parseInt(parts[0], 10), kw = parseInt(parts[1], 10);
+            if (!isFinite(year) || !isFinite(kw)) return null;
+            const firstThursday = new Date(year, 0, 4, 12, 0, 0);
+            const firstMonday = cbWhAddDays(firstThursday, -((firstThursday.getDay() + 6) % 7));
+            return cbWhAddDays(firstMonday, (kw - 1) * 7);
+        };
+
+        const stores = () => ({ // alle Speicher einmal einlesen und weiterreichen
+            tracked: lsGet(TRACKED_KEY, {}),
+            overrides: lsGet(TYPE_KEY, {}),
+            manualAll: lsGet(MANUAL_KEY, {}),
+            absence: cbWhGmGet(ABSENCE_KEY, null),
+            todayIso: cbWhIso(new Date())
+        });
+
+        const closeMenus = () => { // Tages-Menü und Einstellungs-Popup schließen
+            document.querySelectorAll('.cb_wh_menu').forEach(old => old.remove());
+            document.querySelectorAll('#' + PANEL_ID + ' .cb_wh_cfg').forEach(cog => cog.classList.remove('cb_wh_open'));
+        };
+
+        // ── ein einzelner Tag: gestempelte Zeit + angerechnete Abwesenheiten ──
+        const calcDay = (date, c, st) => {
+            const dow = date.getDay();
+            const iso = cbWhIso(date);
+            const isWeekend = (dow === 0 || dow === 6);
+            const dayMin = Math.round(c.dayHours * 60);
+            const day = {
+                iso: iso, date: date, label: DAY_LABELS[(dow + 6) % 7], dayNum: date.getDate(),
+                isWeekend: isWeekend, isToday: iso === st.todayIso, isFuture: iso > st.todayIso,
+                trackedMin: typeof st.tracked[iso] === 'number' ? st.tracked[iso] : null,
+                override: st.overrides[iso] || '', creditMin: 0, chips: [], notes: [],
+                homeoffice: false, pending: false, color: ''
+            };
+            const override = day.override && day.override !== 'auto' ? typeById(day.override) : null;
+
+            if (override && override.id !== 'arbeit') { // manuell gesetzter Abwesenheitstag
+                day.creditMin = isWeekend ? 0 : dayMin;
+                day.chips.push(override.short || override.label);
+                day.color = override.color;
+                day.notes.push(override.label + ' (manuell gesetzt)');
+            } else if (!override) { // aus absence.io
+                const entries = (st.absence && st.absence.days && st.absence.days[iso]) || [];
+                entries.forEach(entry => {
+                    const reason = String(entry.reason || '');
+                    const isWorkReason = c.workReasons.some(name => String(name).toLowerCase() === reason.toLowerCase());
+                    if (isWorkReason) { // Office / Mobile Office -> es wird normal gestempelt
+                        day.homeoffice = true;
+                        day.notes.push(reason + ' (Zeiterfassung läuft normal)');
+                        return;
+                    }
+                    if (entry.status !== 2 && !(entry.status === 0 && c.includePending)) {
+                        day.notes.push(reason + ' (nicht genehmigt, nicht gezählt)');
+                        return;
+                    }
+                    const hours = entry.hourly && entry.hours ? entry.hours : c.dayHours * (entry.ratio || 1);
+                    if (!isWeekend) day.creditMin += Math.round(hours * 60);
+                    day.chips.push(reason);
+                    day.color = day.color || entry.color || '#3ba55d';
+                    if (entry.status === 0) { day.pending = true; day.notes.push(reason + ' (offene Anfrage)'); }
+                    else day.notes.push(reason);
+                });
+                const holiday = st.absence && st.absence.holidays ? st.absence.holidays[iso] : null;
+                if (holiday && c.countHolidays && !isWeekend && day.creditMin < dayMin) {
+                    day.creditMin = dayMin;
+                    day.chips.push('Feiertag');
+                    day.color = day.color || '#8a7bd8';
+                    day.notes.push('Feiertag: ' + holiday);
+                }
+            } else { // 'arbeit' -> Abwesenheiten bewusst ignorieren
+                day.notes.push('als normaler Arbeitstag gesetzt');
+            }
+            if (day.creditMin > dayMin) day.creditMin = dayMin;
+
+            const trackedMin = day.trackedMin || 0;
+            if (c.mode === 'sum') day.totalMin = trackedMin + day.creditMin;
+            else if (c.mode === 'credit') day.totalMin = day.creditMin > 0 ? day.creditMin : trackedMin;
+            else day.totalMin = Math.max(trackedMin, day.creditMin); // 'max' (Standard)
+            return day;
+        };
+
+        // ── beliebiger Zeitraum (Woche = 7 Tage, Monat = 28-31 Tage) ──
+        const calcRange = (startDate, dayCount, c, st, longLabels) => {
+            const days = [], noData = [];
+            let sum = 0;
+            for (let i = 0; i < dayCount; i++) {
+                const day = calcDay(cbWhAddDays(startDate, i), c, st);
+                sum += day.totalMin;
+                if (!day.isWeekend && !day.isFuture && day.trackedMin === null && day.creditMin === 0) {
+                    noData.push(longLabels ? day.dayNum + '.' + cbWhPad(day.date.getMonth() + 1) + '.' : day.label);
+                }
+                days.push(day);
+            }
+            return { days: days, sum: sum, noData: noData };
+        };
+
+        // noch offene Arbeitstage (ab heute), an denen nichts angerechnet ist
+        const openWorkdays = (days, st, dayMin) => days.filter(day =>
+            !day.isWeekend && day.iso >= st.todayIso && day.creditMin < dayMin / 2).length;
+
+        const calcWeek = () => {
+            const c = cfg(), st = stores();
+            const week = cbWhWeekInfo(new Date());
+            const dayMin = Math.round(c.dayHours * 60);
+            const range = calcRange(week.monday, 7, c, st, false);
+            const manual = st.manualAll[week.key] || [];
+            const manualMin = manual.reduce((total, item) => total + Math.round((Number(item.h) || 0) * 60), 0);
+            const targetMin = Math.round(c.weekHours * 60);
+            const doneMin = range.sum + manualMin;
+            return {
+                scope: 'week', week: week, month: null, days: range.days,
+                manual: manual, manualMin: manualMin,
+                targetMin: targetMin, doneMin: doneMin, restMin: targetMin - doneMin,
+                openDays: openWorkdays(range.days, st, dayMin), noData: range.noData,
+                dayMin: dayMin, cfg: c, absence: st.absence,
+                label: 'KW ' + week.kw + ' · ' + cbWhIso(week.monday).split('-').reverse().slice(0, 2).join('.')
+                    + '–' + cbWhIso(cbWhAddDays(week.monday, 4)).split('-').reverse().slice(0, 2).join('.')
+            };
+        };
+
+        const calcMonth = () => {
+            const c = cfg(), st = stores();
+            const info = monthInfo(new Date());
+            const dayMin = Math.round(c.dayHours * 60);
+            const range = calcRange(info.first, info.dayCount, c, st, true);
+            // manuelle Korrekturen haengen an der Kalenderwoche -> eine Woche zaehlt zu dem
+            // Monat, in dem ihr Mittwoch liegt (so wird keine Woche doppelt gezaehlt)
+            const manual = [];
+            let manualMin = 0;
+            Object.keys(st.manualAll).forEach(key => {
+                const monday = mondayOfWeekKey(key);
+                if (!monday) return;
+                const wednesday = cbWhAddDays(monday, 2);
+                if (wednesday.getMonth() !== info.month || wednesday.getFullYear() !== info.year) return;
+                (st.manualAll[key] || []).forEach(item => {
+                    manual.push(item);
+                    manualMin += Math.round((Number(item.h) || 0) * 60);
+                });
+            });
+            const targetMin = Math.round(info.workdays * (c.weekHours / 5) * 60);
+            const doneMin = range.sum + manualMin;
+            return {
+                scope: 'month', week: null, month: info, days: range.days,
+                manual: manual, manualMin: manualMin,
+                targetMin: targetMin, doneMin: doneMin, restMin: targetMin - doneMin,
+                openDays: openWorkdays(range.days, st, dayMin), noData: range.noData,
+                dayMin: dayMin, cfg: c, absence: st.absence,
+                label: info.label + ' · ' + info.workdays + ' Arbeitstage'
+            };
+        };
 
         // ── Styles ──
         const CSS = ''
             + '#cb_wh_panel{margin-bottom:18px;}'
             + '#cb_wh_panel .panel-title{display:flex;align-items:center;gap:6px;}'
             + '#cb_wh_panel .panel-title small{font-weight:400;color:#888;}'
-            + '#cb_wh_panel .cb_wh_sync{margin-left:auto;color:#777;text-decoration:none;font-size:13px;cursor:pointer;}'
-            + '#cb_wh_panel .cb_wh_sync:hover{color:#2A5298;}'
+            + '#cb_wh_panel .cb_wh_actions{margin-left:auto;display:flex;align-items:center;gap:8px;}'
+            + '#cb_wh_panel .cb_wh_actions a{color:#777;text-decoration:none;font-size:13px;cursor:pointer;}'
+            + '#cb_wh_panel .cb_wh_actions a:hover,#cb_wh_panel .cb_wh_actions a.cb_wh_open{color:#2A5298;}'
             + '#cb_wh_panel .cb_wh_sync.cb_wh_spin{animation:cb_wh_rot 1s linear infinite;}'
             + '@keyframes cb_wh_rot{to{transform:rotate(360deg);}}'
             + '#cb_wh_panel .panel-body{padding:12px 14px;}'
@@ -4881,12 +5058,23 @@
             + '#cb_wh_panel .cb_wh_rest b{display:block;font-size:30px;font-weight:700;color:#2A5298;}'
             + '#cb_wh_panel .cb_wh_rest.cb_wh_done b{color:#3ba55d;}'
             + '#cb_wh_panel .cb_wh_rest span{font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.04em;}'
+            + '#cb_wh_panel .cb_wh_rest .cb_wh_sub{display:block;font-style:normal;font-size:11px;color:#8a919c;margin-top:4px;text-transform:none;letter-spacing:0;}'
+            + '#cb_wh_panel .cb_wh_rest .cb_wh_sub.cb_wh_done{color:#3ba55d;}'
             + '#cb_wh_panel .cb_wh_bar{height:7px;border-radius:4px;background:#e6e8ec;overflow:hidden;margin:8px 0 6px;}'
             + '#cb_wh_panel .cb_wh_bar i{display:block;height:100%;background:#2A5298;transition:width .3s;}'
             + '#cb_wh_panel .cb_wh_bar.cb_wh_over i{background:#3ba55d;}'
+            + '#cb_wh_panel .cb_wh_bar.cb_wh_mini{height:4px;margin:0 0 6px;background:#eef0f3;}'
+            + '#cb_wh_panel .cb_wh_bar.cb_wh_mini i{background:#93a7c9;}'
+            + '#cb_wh_panel .cb_wh_bar.cb_wh_mini.cb_wh_over i{background:#84c9a1;}'
             + '#cb_wh_panel .cb_wh_kpis{display:flex;justify-content:space-between;font-size:11px;color:#777;margin-bottom:10px;}'
             + '#cb_wh_panel .cb_wh_kpis b{display:block;font-size:13px;color:#333;}'
             + '#cb_wh_panel .cb_wh_cal{display:flex;gap:3px;margin:0 0 10px;}'
+            + '#cb_wh_panel .cb_wh_cal.cb_wh_grid{display:grid;grid-template-columns:repeat(7,1fr);gap:3px;}'
+            + '#cb_wh_panel .cb_wh_cal.cb_wh_grid .cb_wh_dowhead{font-size:9px;text-transform:uppercase;color:#aaa;text-align:center;line-height:1.5;}'
+            + '#cb_wh_panel .cb_wh_cal.cb_wh_grid .cb_wh_day{padding:2px 1px 3px;}'
+            + '#cb_wh_panel .cb_wh_cal.cb_wh_grid .cb_wh_num{font-size:10px;color:#999;}'
+            + '#cb_wh_panel .cb_wh_cal.cb_wh_grid .cb_wh_val{font-size:11px;margin-top:1px;}'
+            + '#cb_wh_panel .cb_wh_cal.cb_wh_grid .cb_wh_chip{font-size:8px;}'
             + '#cb_wh_panel .cb_wh_day{flex:1 1 0;min-width:0;border:1px solid #dfe2e7;border-radius:4px;padding:3px 1px 4px;text-align:center;cursor:pointer;background:#fff;position:relative;}'
             + '#cb_wh_panel .cb_wh_day:hover{border-color:#2A5298;}'
             + '#cb_wh_panel .cb_wh_day.cb_wh_we{background:#f5f6f8;color:#aaa;}'
@@ -4904,6 +5092,7 @@
             + '#cb_wh_panel .cb_wh_manual{border-top:1px solid #eceef1;padding-top:8px;}'
             + '#cb_wh_panel .cb_wh_mhead{display:flex;justify-content:space-between;font-size:11px;color:#777;text-transform:uppercase;letter-spacing:.03em;margin-bottom:5px;}'
             + '#cb_wh_panel .cb_wh_mhead b{color:#333;}'
+            + '#cb_wh_panel .cb_wh_mhead small{color:#999;font-weight:400;text-transform:none;}'
             + '#cb_wh_panel .cb_wh_add{display:flex;gap:4px;align-items:center;}'
             + '#cb_wh_panel .cb_wh_add input{height:26px;padding:2px 6px;font-size:12px;}'
             + '#cb_wh_panel .cb_wh_add .cb_wh_h{width:52px;text-align:center;flex:0 0 52px;}'
@@ -4920,7 +5109,17 @@
             + '.cb_wh_menu a{display:flex;align-items:center;gap:7px;padding:4px 12px;color:#333;text-decoration:none;cursor:pointer;}'
             + '.cb_wh_menu a:hover{background:#eef2f9;}'
             + '.cb_wh_menu a i{width:9px;height:9px;border-radius:50%;display:inline-block;border:1px solid rgba(0,0,0,.15);}'
-            + '.cb_wh_menu a.cb_wh_act{font-weight:700;}';
+            + '.cb_wh_menu a.cb_wh_act{font-weight:700;}'
+            + '.cb_wh_cfgbox{min-width:254px;padding:6px 0 10px;}'
+            + '.cb_wh_cfgbox b{padding:8px 12px 4px;}'
+            + '.cb_wh_cfgbox b.cb_wh_first{padding-top:2px;}'
+            + '.cb_wh_cfgbox a i{width:10px;height:10px;background:#fff;border:1px solid #b9c0ca;flex:0 0 auto;}'
+            + '.cb_wh_cfgbox a.cb_wh_act i{background:#2A5298;border-color:#2A5298;box-shadow:0 0 0 2px #fff inset;}'
+            + '.cb_wh_cfgrow{display:flex;align-items:center;gap:6px;padding:2px 12px;color:#555;}'
+            + '.cb_wh_cfgrow label{flex:1 1 auto;margin:0;font-weight:400;}'
+            + '.cb_wh_cfgrow input{flex:0 0 56px;width:56px;height:24px;padding:1px 5px;font-size:12px;text-align:center;}'
+            + '.cb_wh_cfgrow em{color:#999;font-style:normal;font-size:11px;}'
+            + '.cb_wh_cfgnote{padding:8px 12px 0;color:#9aa0a8;font-size:10px;line-height:1.4;}';
 
         const injectCss = () => {
             if (document.getElementById('cb_wh_css')) return;
@@ -4931,8 +5130,8 @@
         };
 
 
-        // ── Mini-Kalender der aktuellen Woche ──
-        const calHtml = (data) => data.days.map(day => {
+        // ── Mini-Kalender: Woche als Streifen, Monat als Raster ──
+        const dayCellHtml = (day, compact) => {
             const classes = ['cb_wh_day'];
             if (day.isWeekend) classes.push('cb_wh_we');
             if (day.isToday) classes.push('cb_wh_today');
@@ -4944,73 +5143,101 @@
                 .concat(day.creditMin > 0 ? ['angerechnet: ' + cbWhFmt(day.creditMin)] : [])
                 .concat(day.notes)
                 .concat(['', 'Klick: Tag manuell setzen'])
-                .join('\n');
+                .join(NL);
             return '<div class="' + classes.join(' ') + '" data-iso="' + day.iso + '"'
                 + (day.chips.length && day.color ? ' style="background:' + esc(day.color) + '"' : '')
                 + ' title="' + esc(title) + '">'
                 + (day.homeoffice ? '<span class="cb_wh_ho" title="Office / Mobile Office">⌂</span>' : '')
                 + (day.pending ? '<span class="cb_wh_pend" title="offene Anfrage">•</span>' : '')
-                + '<span class="cb_wh_dow">' + day.label + '</span>'
+                + (compact ? '' : '<span class="cb_wh_dow">' + day.label + '</span>')
                 + '<span class="cb_wh_num">' + day.dayNum + '.</span>'
                 + '<span class="cb_wh_val">' + value + '</span>'
                 + (day.chips.length ? '<span class="cb_wh_chip">' + esc(day.chips[0]) + '</span>' : '')
                 + '</div>';
-        }).join('');
+        };
+
+        const calHtml = (data) => {
+            if (data.scope !== 'month') return data.days.map(day => dayCellHtml(day, false)).join('');
+            const lead = (data.days[0].date.getDay() + 6) % 7; // Monatsanfang auf den richtigen Wochentag schieben
+            return DAY_LABELS.map(label => '<span class="cb_wh_dowhead">' + label + '</span>').join('')
+                + new Array(lead + 1).join('<span></span>')
+                + data.days.map(day => dayCellHtml(day, true)).join('');
+        };
 
         // ── Panel-Inhalt zeichnen ──
         const render = () => {
             const panel = document.getElementById(PANEL_ID);
             if (!panel) return;
-            const data = calcWeek();
-            const percent = data.targetMin > 0 ? Math.max(0, Math.min(100, Math.round(data.doneMin / data.targetMin * 100))) : 0;
-            const restDone = data.restMin <= 0;
-            const perDay = (!restDone && data.openDays > 0) ? cbWhFmt(data.restMin / data.openDays) : '–';
-            const age = data.absence && data.absence.ts ? Math.round((Date.now() - data.absence.ts) / 60000) : null;
+            const view = viewMode(), scope = scopeMode();
+            const week = calcWeek();
+            const month = (view === 'month' || scope !== 'week') ? calcMonth() : null;
+            const calData = (view === 'month' && month) ? month : week; // Mini-Kalender
+            const main = (scope === 'month' && month) ? month : week;   // grosse Anzeige
+            const sub = (scope === 'both' && month) ? month : null;     // kleine Zusatzzeile
+            const isMonth = main.scope === 'month';
+
+            const percent = main.targetMin > 0 ? Math.max(0, Math.min(100, Math.round(main.doneMin / main.targetMin * 100))) : 0;
+            const restDone = main.restMin <= 0;
+            const perDay = (!restDone && main.openDays > 0) ? cbWhFmt(main.restMin / main.openDays) : '–';
+            const subPercent = sub && sub.targetMin > 0 ? Math.max(0, Math.min(100, Math.round(sub.doneMin / sub.targetMin * 100))) : 0;
+            const subDone = sub ? sub.restMin <= 0 : false;
+            const age = main.absence && main.absence.ts ? Math.round((Date.now() - main.absence.ts) / 60000) : null;
 
             const heading = panel.querySelector('.cb_wh_kw');
-            if (heading) heading.textContent = 'KW ' + data.week.kw + ' · ' + cbWhIso(data.week.monday).split('-').reverse().slice(0, 2).join('.')
-                + '–' + cbWhIso(cbWhAddDays(data.week.monday, 4)).split('-').reverse().slice(0, 2).join('.');
+            if (heading) heading.textContent = calData.label;
 
             const icon = panel.querySelector('.cb_wh_sync'); // Infos stecken im Tooltip des Sync-Icons
             if (icon) {
                 const when = age === null ? 'noch nicht geladen'
                     : (age < 1 ? 'gerade eben' : (age < 60 ? 'vor ' + age + ' Min.' : 'vor ' + Math.round(age / 60) + ' Std.'));
+                const missing = main.noData.slice(0, 8).join(', ') + (main.noData.length > 8 ? ' …' : '');
                 icon.setAttribute('title', !cbWhHasGm()
                     ? 'Für die Übernahme aus absence.io werden @grant GM_setValue und GM_getValue gebraucht'
                     : 'Abwesenheiten aus absence.io holen (Stand: ' + when + ')'
-                        + (data.absence && data.absence.user && data.absence.user.name ? ' – ' + data.absence.user.name : '')
-                        + (data.noData.length ? '\nKeine Tabellen-Zeilen für ' + data.noData.join(', ') + ' – als 0:00 gerechnet' : ''));
+                        + (main.absence && main.absence.user && main.absence.user.name ? ' – ' + main.absence.user.name : '')
+                        + (main.noData.length ? NL + 'Keine Tabellen-Zeilen für ' + missing + ' – als 0:00 gerechnet' : ''));
             }
+
+            const sollTitle = isMonth
+                ? 'Monats-Soll: ' + main.month.workdays + ' Arbeitstage × ' + cbWhFmtDec(main.cfg.weekHours / 5) + ' Std.'
+                : 'Wochen-Soll';
 
             panel.querySelector('.panel-body').innerHTML = ''
                 + '<div class="cb_wh_rest' + (restDone ? ' cb_wh_done' : '') + '">'
-                +     '<b>' + (restDone ? '+' + cbWhFmt(-data.restMin) : cbWhFmt(data.restMin)) + '</b>'
-                +     '<span>' + (restDone ? 'Stunden über dem Soll' : 'Stunden noch offen') + '</span>'
+                +     '<b>' + (restDone ? '+' + cbWhFmt(-main.restMin) : cbWhFmt(main.restMin)) + '</b>'
+                +     '<span>' + (restDone ? 'Stunden über dem Soll' : 'Stunden noch offen') + (isMonth ? ' (Monat)' : '')
+                +         (sub ? '<em class="cb_wh_sub' + (subDone ? ' cb_wh_done' : '') + '" title="' + esc(sub.label + ' · Soll ' + cbWhFmt(sub.targetMin)) + '">'
+                +             sub.month.label + ': ' + (subDone ? '+' + cbWhFmt(-sub.restMin) + ' über dem Soll' : cbWhFmt(sub.restMin) + ' offen')
+                +             ' · ' + cbWhFmt(sub.doneMin) + ' / ' + cbWhFmt(sub.targetMin) + '</em>' : '')
+                +     '</span>'
                 + '</div>'
                 + '<div class="cb_wh_bar' + (restDone ? ' cb_wh_over' : '') + '"><i style="width:' + percent + '%"></i></div>'
+                + (sub ? '<div class="cb_wh_bar cb_wh_mini' + (subDone ? ' cb_wh_over' : '') + '" title="Fortschritt im ganzen Monat"><i style="width:' + subPercent + '%"></i></div>' : '')
                 + '<div class="cb_wh_kpis">'
-                +     '<span title="Wochen-Soll">Soll<b>' + cbWhFmt(data.targetMin) + '</b></span>'
-                +     '<span title="Gestempelt + angerechnete Abwesenheiten + manuelle Korrekturen">Ist<b>' + cbWhFmt(data.doneMin) + '</b></span>'
-                +     '<span title="Rest verteilt auf die verbleibenden Arbeitstage (' + data.openDays + ')">&#216; / Tag<b>' + perDay + '</b></span>'
+                +     '<span title="' + esc(sollTitle) + '">Soll' + (isMonth ? ' (Monat)' : '') + '<b>' + cbWhFmt(main.targetMin) + '</b></span>'
+                +     '<span title="Gestempelt + angerechnete Abwesenheiten + manuelle Korrekturen">Ist<b>' + cbWhFmt(main.doneMin) + '</b></span>'
+                +     '<span title="Rest verteilt auf die verbleibenden Arbeitstage (' + main.openDays + ')">&#216; / Tag<b>' + perDay + '</b></span>'
                 + '</div>'
-                + '<div class="cb_wh_cal">' + calHtml(data) + '</div>'
+                + '<div class="cb_wh_cal' + (calData.scope === 'month' ? ' cb_wh_grid' : '') + '">' + calHtml(calData) + '</div>'
                 + '<div class="cb_wh_manual">'
-                +     '<div class="cb_wh_mhead"><span>Manuelle Korrektur</span><b>'
-                +         (data.manualMin >= 0 ? '+' : '') + cbWhFmt(data.manualMin) + '</b></div>'
+                +     '<div class="cb_wh_mhead"><span title="' + esc('gilt für die laufende Woche (KW ' + week.week.kw + ')') + '">Manuelle Korrektur</span><b>'
+                +         (week.manualMin >= 0 ? '+' : '') + cbWhFmt(week.manualMin)
+                +         (month ? ' <small title="alle Korrekturen des Monats">(Monat ' + (month.manualMin >= 0 ? '+' : '') + cbWhFmt(month.manualMin) + ')</small>' : '')
+                +     '</b></div>'
                 +     '<div class="cb_wh_add">'
                 +         '<input type="text" class="form-control cb_wh_h" placeholder="1,5" title="Stunden (z.B. 1,5 oder 0:30)">'
                 +         '<input type="text" class="form-control cb_wh_note" placeholder="Notiz (optional)">'
                 +         '<button type="button" class="btn btn-default cb_wh_minus" title="Stunden abziehen">&#8722;</button>'
                 +         '<button type="button" class="btn btn-default cb_wh_plus" title="Stunden hinzufügen">+</button>'
                 +     '</div>'
-                +     (data.manual.length ? '<ul class="cb_wh_list">' + data.manual.map((item, index) => '<li>'
+                +     (week.manual.length ? '<ul class="cb_wh_list">' + week.manual.map((item, index) => '<li>'
                             + '<b>' + ((Number(item.h) || 0) >= 0 ? '+' : '') + cbWhFmt((Number(item.h) || 0) * 60) + '</b>'
                             + '<em>' + esc(item.note || 'Korrektur') + '</em>'
                             + '<a class="cb_wh_del glyphicon glyphicon-remove" data-index="' + index + '" title="entfernen"></a>'
                             + '</li>').join('') + '</ul>' : '')
                 + '</div>';
 
-            bindEvents(panel, data);
+            bindEvents(panel);
         };
 
 
@@ -5044,7 +5271,7 @@
 
         // ── Tages-Typ manuell setzen (Klick auf einen Tag) ──
         const openDayMenu = (cell) => {
-            document.querySelectorAll('.cb_wh_menu').forEach(old => old.remove());
+            closeMenus();
             const iso = cell.getAttribute('data-iso');
             const current = lsGet(TYPE_KEY, {})[iso] || 'auto';
             const menu = document.createElement('div');
@@ -5070,6 +5297,81 @@
             setTimeout(() => { // erst danach lauschen, sonst schließt der eigene Klick das Menü direkt
                 const close = (event) => {
                     if (!menu.contains(event.target)) { menu.remove(); document.removeEventListener('click', close); }
+                };
+                document.addEventListener('click', close);
+            }, 0);
+        };
+
+        // ── Einstellungs-Popup (Zahnrad neben dem Sync-Icon) ──
+        const cfgGroup = (key, options, current) => options.map(option =>
+            '<a data-cfg="' + key + '" data-value="' + option.id + '" class="' + (option.id === current ? 'cb_wh_act' : '') + '">'
+            + '<i></i>' + esc(option.label) + '</a>').join('');
+
+        const openCfgMenu = (anchor) => {
+            const open = !!document.querySelector('.cb_wh_cfgbox');
+            closeMenus();
+            if (open) return; // zweiter Klick auf das Zahnrad schliesst das Popup wieder
+
+            const c = cfg();
+            const box = document.createElement('div');
+            box.className = 'cb_wh_menu cb_wh_cfgbox';
+            box.innerHTML = '<b class="cb_wh_first">Kalender-Ansicht</b>'
+                + cfgGroup('week_view', VIEW_OPTIONS, viewMode())
+                + '<b>Soll- / Offene Stunden</b>'
+                + cfgGroup('week_hours_scope', SCOPE_OPTIONS, scopeMode())
+                + '<b>Soll-Stunden</b>'
+                + '<div class="cb_wh_cfgrow"><label>Woche</label>'
+                +     '<input type="text" class="form-control cb_wh_cfg_week" value="' + esc(cbWhFmtDec(c.weekHours)) + '"><em>Std.</em></div>'
+                + '<div class="cb_wh_cfgrow"><label>Abwesenheitstag</label>'
+                +     '<input type="text" class="form-control cb_wh_cfg_day" value="' + esc(cbWhFmtDec(c.dayHours)) + '"><em>Std.</em></div>'
+                + '<div class="cb_wh_cfgnote">Monats-Soll = Arbeitstage des Monats (Mo–Fr) × Wochen-Soll / 5.</div>';
+            document.body.appendChild(box);
+            anchor.classList.add('cb_wh_open');
+
+            const place = () => { // rechtsbuendig unter dem Zahnrad
+                const rect = anchor.getBoundingClientRect();
+                box.style.top = (window.scrollY + rect.bottom + 6) + 'px';
+                box.style.left = Math.max(6, Math.min(window.scrollX + rect.right - box.offsetWidth,
+                    window.scrollX + document.documentElement.clientWidth - box.offsetWidth - 10)) + 'px';
+            };
+            place();
+
+            box.querySelectorAll('a[data-cfg]').forEach(link => link.addEventListener('click', () => {
+                const key = link.getAttribute('data-cfg');
+                const patch = {};
+                patch[key] = link.getAttribute('data-value');
+                saveSettings(patch);
+                box.querySelectorAll('a[data-cfg="' + key + '"]').forEach(other => {
+                    if (other === link) other.classList.add('cb_wh_act'); else other.classList.remove('cb_wh_act');
+                });
+                render();
+                place();
+            }));
+
+            const applyNumber = (input, key, fallback) => {
+                const value = numOr(input.value, 0);
+                if (!value) { input.value = cbWhFmtDec(fallback); return; }
+                const patch = {};
+                patch[key] = value;
+                saveSettings(patch);
+                input.value = cbWhFmtDec(value);
+                render();
+                place();
+            };
+            const weekInput = box.querySelector('.cb_wh_cfg_week');
+            const dayInput = box.querySelector('.cb_wh_cfg_day');
+            weekInput.addEventListener('change', () => applyNumber(weekInput, 'week_hours', cfg().weekHours));
+            dayInput.addEventListener('change', () => applyNumber(dayInput, 'absence_day_hours', cfg().dayHours));
+            [weekInput, dayInput].forEach(input => input.addEventListener('keydown', event => {
+                if (event.key === 'Enter') { event.preventDefault(); input.blur(); }
+            }));
+
+            setTimeout(() => { // erst danach lauschen, sonst schliesst der eigene Klick das Popup direkt
+                const close = (event) => {
+                    if (box.contains(event.target)) return;
+                    box.remove();
+                    anchor.classList.remove('cb_wh_open');
+                    document.removeEventListener('click', close);
                 };
                 document.addEventListener('click', close);
             }, 0);
@@ -5147,11 +5449,19 @@
             if (!column) panel.style.maxWidth = '360px';
             panel.innerHTML = '<div class="panel-heading"><h3 class="panel-title">Arbeitsstunden'
                 + '<small class="cb_wh_kw"></small>'
-                + '<a class="cb_wh_sync glyphicon glyphicon-refresh" title="Abwesenheiten aus absence.io holen"></a>'
+                + '<span class="cb_wh_actions">'
+                +     '<a class="cb_wh_sync glyphicon glyphicon-refresh" title="Abwesenheiten aus absence.io holen"></a>'
+                +     '<a class="cb_wh_cfg glyphicon glyphicon-cog" title="Anzeige-Einstellungen"></a>'
+                + '</span>'
                 + '</h3></div><div class="panel-body"></div>';
             const target = column || fallback;
             target.insertBefore(panel, target.firstChild);
             panel.querySelector('.cb_wh_sync').addEventListener('click', () => startSync());
+            panel.querySelector('.cb_wh_cfg').addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                openCfgMenu(event.currentTarget);
+            });
             return true;
         };
 

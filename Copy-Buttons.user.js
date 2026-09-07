@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Copy-Buttons
 // @namespace    https://github.com/zentolik
-// @version      1.03
+// @version      1.04
 // @description  doing stuff ʕ·͡ᴥ·ʔ
 // @author       Zentolik
 // @match        https://ipsi.securewebsystems.net/project/detailed/*
@@ -18,7 +18,7 @@
 
 !(function() { // ʕ·͡ᴥ·ʔ hi & ty <3
     'use strict';
-    const SCRIPT_VERSION = '1.03';
+    const SCRIPT_VERSION = '1.04';
     console.log(`ʕ·͡ᴥ·ʔ *bup* v${SCRIPT_VERSION}`);
     let settings = {
         button_position: true, // ändert die position vom btn (wenn auf "false", empfähle ich "copy_icon" zu aktivieren") //
@@ -35,6 +35,8 @@
         department: '',
         user: '',
         user_email: '',
+        user_role: '', // Rolle aus der IPSI-Kopfzeile – im User-Panel änderbar //
+        user_ipsi_id: '', // Mitarbeiter-ID aus IPSI – im User-Panel änderbar //
         ls_sort: 'project_id', // Sortierkriterium der Projekt-Auflistung: 'project_id' oder 'client_id' (wird auch als führender Wert im Label angezeigt)
         ps_labels: true, // zeigt in der Meilensteine-Übersicht die PS-/Zeit-Labels an //
         auto_collect: true, // liest die Projektdaten (KD-Nr., DFS-Speicherort usw.) automatisch beim Laden der Seite aus – Speicherort über die DFS-API, Domains-Panel nur als Fallback //
@@ -54,8 +56,13 @@
         absence_include_pending: true, // noch nicht genehmigte Abwesenheiten mitzählen //
         absence_hours_mode: 'max', // 'max' = gestempelte oder angerechnete Zeit (das Höhere) / 'sum' = beides addieren / 'credit' = an Abwesenheitstagen nur die Gutschrift //
         absence_auto_sync: false, // absence.io automatisch in einem Hintergrund-Tab abfragen, wenn die Daten älter als 12 Std. sind //
-        week_view: 'week', // Mini-Kalender im Wochenstunden-Panel: 'week' (aktuelle Woche) oder 'month' (ganzer Monat) – umschaltbar über das Zahnrad im Panel //
-        week_hours_scope: 'week', // Soll-/Offen-Anzeige: 'week' / 'month' (ganzer Monat) / 'both' (Woche groß, Monat klein) – umschaltbar über das Zahnrad im Panel //
+        week_view: 'month', // Mini-Kalender im Wochenstunden-Panel: 'week' (aktuelle Woche) oder 'month' (ganzer Monat) – umschaltbar über das Zahnrad im Panel //
+        week_hours_scope: 'both', // Soll-/Offen-Anzeige: 'week' / 'month' (ganzer Monat) / 'both' (Woche groß, Monat klein) – umschaltbar über das Zahnrad im Panel //
+        week_until_hours: 4, // Feierabend-Uhrzeit erst einblenden, wenn weniger als so viele Stunden offen sind – einstellbar über das Zahnrad im Panel //
+        cal_collapsed: 'closed', // Mini-Kalender beim Seitenstart: 'open' / 'closed' – umschaltbar über das Zahnrad im Panel //
+        cal_remember: 'off', // ein-/ausgeklappten Zustand des Mini-Kalenders merken: 'on' / 'off' //
+        cal_collapsed_mode: 'week', // was der eingeklappte Mini-Kalender in der Monats-Ansicht zeigt: 'week' (nur die aktuelle Woche) / 'none' (nichts) //
+        keys: { nav_prev: 'ArrowLeft', nav_next: 'ArrowRight', nav_today: 't', view_toggle: 'm', cal_toggle: 'Enter' }, // Tastatur-Steuerung des Wochenstunden-Panels – anpassbar über das Zahnrad im Panel //
     };
 
     const saveSettings = (newSettings) => { // Settings speichern – auch außerhalb des Settings-Popups nutzbar //
@@ -64,6 +71,141 @@
     };
 
     let refreshPsLabels = () => {}; // wird von "setupPsLabels" gesetzt, damit das Setting sofort greift //
+    let refreshUserButtons = () => {}; // wird in "setupDepartmentDropdown" auf updateCopyButton gesetzt //
+
+    // ── Nutzerdaten aus IPSI ──────────────────────────────────────────────────
+    // Login-Name und Rolle stehen in der Kopfzeile jeder IPSI-Seite; voller Name,
+    // Mitarbeiter-ID, Abteilung und Team stehen auf "/calendar" – die Selects sind
+    // dort serverseitig auf den angemeldeten Nutzer vorbelegt (option[selected]).
+    // Die Werte dienen im User-Panel als Platzhalter und werden benutzt, solange in
+    // den Feldern nichts Eigenes steht. Der Sync-Button holt sie erneut und schreibt
+    // sie sichtbar in die Felder.
+    let ipsiUser = { firstname: '', lastname: '', user: '', user_email: '', user_role: '',
+                     user_ipsi_id: '', department: '', team: '', department_value: '' };
+    const ipsiDefault = { user: false, user_email: false, user_role: false, user_ipsi_id: false, department: false };
+
+    const cbStoredSettings = () => { // was wirklich gespeichert ist (nicht die Laufzeit-Defaults)
+        try { return JSON.parse(localStorage.getItem('settings') || '{}'); } catch (e) { return {}; }
+    };
+
+    const cbPlainName = (text) => String(text || '').toLowerCase()
+        .split('ä').join('ae').split('ö').join('oe').split('ü').join('ue').split('ß').join('ss');
+
+    const cbIpsiHeader = (selector, doc) => { // Werte aus der IPSI-Kopfzeile
+        const node = (doc || document).querySelector('.userIdentity ' + selector);
+        return node ? node.textContent.trim() : '';
+    };
+    const cbIpsiLogin = (doc) => cbIpsiHeader('.userName', doc).split('@')[0]; // z.B. "k.korkmaz"
+
+    const cbSetSelectValue = (select, value) => { // fehlende Optionen ergänzen, damit jeder Wert passt
+        if (!select || !value) return;
+        const known = Array.prototype.some.call(select.options, (option) => option.value === value);
+        if (!known) {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = value;
+            select.appendChild(option);
+        }
+        select.value = value;
+    };
+
+    const cbSelectDepartment = (value) => { // "Webdepartment Berlin/Team X" auf beide Selects verteilen
+        const mainSelect = document.getElementById('main_dept_select');
+        const subSelect = document.getElementById('sub_dept_select_webdepartmentberlin');
+        const subBox = document.getElementById('cb_user_webdepartmentberlin_container');
+        if (!mainSelect || !value) return;
+        const isWeb = value.indexOf('Webdepartment Berlin') === 0;
+        cbSetSelectValue(mainSelect, isWeb ? 'Webdepartment Berlin' : value);
+        if (subBox) subBox.style.display = isWeb ? 'block' : 'none';
+        if (isWeb && subSelect) cbSetSelectValue(subSelect, value.split('/')[1] || '');
+    };
+
+    const cbFetchIpsiUser = () => fetch('/calendar', { credentials: 'same-origin' })
+        .then(response => response.ok ? response.text() : '')
+        .then(html => {
+            if (!html) return;
+            const doc = new DOMParser().parseFromString(html, 'text/html');
+            const picked = (id) => { // die vorbelegte Option des jeweiligen Selects
+                const select = doc.getElementById(id);
+                const option = select ? select.querySelector('option[selected]') : null;
+                return option
+                    ? { text: option.textContent.trim(), value: (option.getAttribute('value') || '').trim() }
+                    : { text: '', value: '' };
+            };
+            const employee = picked('employee'); // Format "Nachname, Vorname"
+            const parts = employee.text.split(',');
+            const lastname = (parts[0] || '').trim(), firstname = (parts[1] || '').trim();
+            const login = cbIpsiLogin() || cbIpsiLogin(doc);
+            if (login) ipsiUser.user_email = login;
+            ipsiUser.user_role = cbIpsiHeader('.userRole') || cbIpsiHeader('.userRole', doc);
+            // Sicherheitsnetz: der vorbelegte Mitarbeiter muss zum Login passen
+            if (!firstname || !lastname || cbPlainName(login).indexOf(cbPlainName(lastname)) === -1) {
+                console.log('ʕ·͡ᴥ·ʔ IPSI-Nutzerdaten passen nicht zum Login – keine Vorbelegung');
+                return;
+            }
+            ipsiUser.firstname = firstname;
+            ipsiUser.lastname = lastname;
+            ipsiUser.user = firstname + ', ' + lastname; // gleiches Format wie settings.user
+            ipsiUser.user_ipsi_id = employee.value;
+            ipsiUser.department = picked('department').text;
+            ipsiUser.team = picked('team').text;
+            // settings.department fuehrt das Team nur beim Webdepartment Berlin mit
+            ipsiUser.department_value = (ipsiUser.department === 'Webdepartment Berlin' && ipsiUser.team)
+                ? ipsiUser.department + '/' + ipsiUser.team
+                : ipsiUser.department;
+        })
+        .catch(() => { console.log('ʕ·͡ᴥ·ʔ IPSI-Nutzerdaten nicht erreichbar'); });
+
+    const cbApplyIpsiUser = () => { // Platzhalter setzen und Defaults in die settings legen
+        const placeholder = (id, value) => {
+            const input = document.getElementById(id);
+            if (input && value) input.placeholder = value;
+        };
+        placeholder('cb_user_firstname', ipsiUser.firstname);
+        placeholder('cb_user_lastname', ipsiUser.lastname);
+        placeholder('cb_user_email', ipsiUser.user_email);
+        placeholder('cb_user_role', ipsiUser.user_role);
+        placeholder('cb_user_ipsi_id', ipsiUser.user_ipsi_id);
+
+        const stored = cbStoredSettings();
+        const useDefault = (key, value) => { // ein gespeicherter eigener Wert hat immer Vorrang
+            if (stored[key]) { ipsiDefault[key] = false; return; }
+            if (!value) return;
+            settings[key] = value;
+            ipsiDefault[key] = true;
+        };
+        useDefault('user', ipsiUser.user);
+        useDefault('user_email', ipsiUser.user_email);
+        useDefault('user_role', ipsiUser.user_role);
+        useDefault('user_ipsi_id', ipsiUser.user_ipsi_id);
+        useDefault('department', ipsiUser.department_value);
+
+        const mainSelect = document.getElementById('main_dept_select');
+        if (mainSelect && !mainSelect.value && ipsiDefault.department) { // Abteilung + Team vorauswählen
+            cbSelectDepartment(settings.department);
+        }
+        if (ipsiDefault.user || ipsiDefault.user_email || ipsiDefault.user_role
+            || ipsiDefault.user_ipsi_id || ipsiDefault.department) refreshUserButtons();
+    };
+
+    const cbFillPanelFromIpsi = () => { // Sync-Button: IPSI-Werte sichtbar in die Felder schreiben
+        const setValue = (id, value) => {
+            const input = document.getElementById(id);
+            if (input && value) input.value = value;
+        };
+        setValue('cb_user_firstname', ipsiUser.firstname);
+        setValue('cb_user_lastname', ipsiUser.lastname);
+        setValue('cb_user_email', ipsiUser.user_email);
+        setValue('cb_user_role', ipsiUser.user_role);
+        setValue('cb_user_ipsi_id', ipsiUser.user_ipsi_id);
+        cbSelectDepartment(ipsiUser.department_value);
+    };
+
+    if (window.location.pathname.indexOf('/detailed/') !== -1) { // nur dort gibt es das User-Panel
+        ipsiUser.user_email = cbIpsiLogin();
+        ipsiUser.user_role = cbIpsiHeader('.userRole');
+        cbFetchIpsiUser().then(cbApplyIpsiUser);
+    }
 
     const selectors = { // Attribute, zum selektieren der Container
         server_attr: ['data-v-7fcb082d','data-v-8744275e'], // selector zum edo-btn
@@ -1385,7 +1527,7 @@
                 color: var(--cb_font);
                 cursor: pointer;
             }
-            .cb_container [id*="_delete_btn"], .cb_container [id*="_save_btn"], .cb_container [id*="_send_btn"] {
+            .cb_container [id*="_delete_btn"], .cb_container [id*="_save_btn"], .cb_container [id*="_send_btn"], .cb_container [id*="_sync_btn"] {
                 width: calc(100% - (15px* 2));
                 height: 35px;
                 margin: 15px;
@@ -1408,6 +1550,38 @@
             }
             .cb_container [id*="_save_btn"]:hover, .cb_container [id*="_send_btn"]:hover {
                 background: var(--cb_active_dark);
+            }
+            .cb_container [id*="_sync_btn"] {
+                background: var(--cb_deactivated);
+            }
+            .cb_container [id*="_sync_btn"]:hover {
+                background: var(--cb_deactivated_dark);
+            }
+            .cb_container .cb_user_btns {
+                display: flex;
+                align-items: center;
+                width: 100%;
+            }
+            .cb_container .cb_user_btns #cb_user_save_btn {
+                flex: 1 1 auto;
+                width: auto;
+                margin: 15px 0 15px 15px;
+            }
+            .cb_container .cb_user_btns #cb_user_sync_btn {
+                flex: 0 0 45px;
+                width: 45px;
+                margin: 15px 15px 15px 8px;
+            }
+            .cb_container #cb_user_sync_btn .cb_user_spin {
+                display: inline-block;
+                animation: cb_user_rot 0.9s linear infinite;
+            }
+            @keyframes cb_user_rot {
+                to { transform: rotate(360deg); }
+            }
+            .cb_container .cb_side_container .cb_user_content {
+                max-height: calc(100vh - 210px);
+                overflow-y: auto;
             }
             .cb_container .cb_side_container .cb_side_content {
                 width: 160px;
@@ -1730,7 +1904,13 @@
                         <input type="text" id="cb_user_lastname" placeholder="Dein Nachname" />
 
                         <label for="cb_user_email">E-Mail <span style="opacity:.6;font-size:.85em">(nur vor @)</span></label>
-                        <input type="text" id="cb_user_email" placeholder="z.B. max.mustermann" />
+                        <input type="text" id="cb_user_email" placeholder="z.B. max.mustermann" title="Entspricht dem IPSI-Login" />
+
+                        <label for="cb_user_role">Rolle</label>
+                        <input type="text" id="cb_user_role" placeholder="z.B. Web Designer" title="Rolle aus der IPSI-Kopfzeile" />
+
+                        <label for="cb_user_ipsi_id">Mitarbeiter-ID</label>
+                        <input type="text" id="cb_user_ipsi_id" placeholder="z.B. 173816" title="Mitarbeiter-ID aus IPSI" />
                       </div>
 
                       <div class="cb_department_container">
@@ -1754,7 +1934,10 @@
                         </div>
                       </div>
                     </div>
-                    <button id="cb_user_save_btn" class="glyphicon glyphicon-floppy-disk" title="Änderungen speichern"></button>
+                    <div class="cb_user_btns">
+                        <button id="cb_user_save_btn" class="glyphicon glyphicon-floppy-disk" title="Änderungen speichern"></button>
+                        <button id="cb_user_sync_btn" title="Daten erneut aus IPSI holen und in die Felder schreiben"><span class="glyphicon glyphicon-refresh"></span></button>
+                    </div>
                 </div>
 
                 <div class="cb_sup_container cb_side_container">
@@ -2267,12 +2450,17 @@
 
                 const emailInput = document.getElementById("cb_user_email");
                 const user_email = emailInput.value.replace(/@.*/g, '').trim(); // nur Teil vor @
+                const user_role = document.getElementById("cb_user_role").value.trim();
+                const user_ipsi_id = document.getElementById("cb_user_ipsi_id").value.trim();
 
                 if (department) settings.department = department;
-                if (user) settings.user = user;
+                settings.user = user;             // leer lassen = wieder der Wert aus IPSI
                 settings.user_email = user_email; // auch leeren Wert speichern (löschen möglich)
+                settings.user_role = user_role;
+                settings.user_ipsi_id = user_ipsi_id;
 
                 localStorage.setItem('settings', JSON.stringify(settings));
+                cbApplyIpsiUser(); // leer gelassene Felder wieder mit den IPSI-Werten belegen
 
                 updateCopyButton(); // Buttons direkt aktualisieren, damit sie auf'm neuen Stand sind
 
@@ -2285,27 +2473,26 @@
                 }, 225);
             });
 
-            // Vorbelegung laden
-            if (settings.department) {
-                const isWeb = settings.department.startsWith("Webdepartment Berlin/");
-                if (isWeb) {
-                    const [, subTeam] = settings.department.split("/");
-                    mainSelect.value = "Webdepartment Berlin";
-                    subSelectContainer.style.display = "block";
-                    subSelect.value = subTeam;
-                } else {
-                    mainSelect.value = settings.department;
-                }
+            // Vorbelegung laden – aus IPSI stammende Werte bleiben Platzhalter
+            refreshUserButtons = updateCopyButton; // damit die Buttons nach dem IPSI-Abruf neu gebaut werden
+            if (settings.department && !ipsiDefault.department) {
+                cbSelectDepartment(settings.department);
             }
-            if (settings.user) {
+            if (settings.user && !ipsiDefault.user) {
                 const [first = "", last = ""] = settings.user.split(',').map(s => s.trim());
                 document.getElementById("cb_user_firstname").value = first;
                 document.getElementById("cb_user_lastname").value = last;
             }
+            if (settings.user_role && !ipsiDefault.user_role) {
+                document.getElementById("cb_user_role").value = settings.user_role;
+            }
+            if (settings.user_ipsi_id && !ipsiDefault.user_ipsi_id) {
+                document.getElementById("cb_user_ipsi_id").value = settings.user_ipsi_id;
+            }
 
             // E-Mail-Vorbelegung und @-Filter
             const emailInput = document.getElementById("cb_user_email");
-            if (settings.user_email) {
+            if (settings.user_email && !ipsiDefault.user_email) {
                 emailInput.value = settings.user_email;
             }
             emailInput.addEventListener('input', function () {
@@ -2315,6 +2502,24 @@
             emailInput.addEventListener('keydown', function (e) {
                 if (e.key === '@') e.preventDefault();
             });
+
+            // Sync: Daten erneut aus IPSI holen und sichtbar in die Felder schreiben
+            const syncBtn = document.getElementById("cb_user_sync_btn");
+            if (syncBtn) syncBtn.addEventListener("click", function () {
+                const icon = syncBtn.querySelector('.glyphicon');
+                if (icon) icon.classList.add('cb_user_spin');
+                cbFetchIpsiUser().then(function () {
+                    if (icon) icon.classList.remove('cb_user_spin');
+                    if (!ipsiUser.user && !ipsiUser.user_email) {
+                        showNotification('Keine Daten aus IPSI erhalten');
+                        return;
+                    }
+                    cbFillPanelFromIpsi();
+                    showNotification('Aus IPSI übernommen – noch speichern');
+                });
+            });
+
+            cbApplyIpsiUser(); // Platzhalter, Abteilung und Team aus IPSI setzen
 
         })();
 
@@ -4631,6 +4836,7 @@
     function cbWhToast(text, ok) { // kleine Einblendung oben rechts
         try {
             const box = document.createElement('div');
+            box.className = 'cb_wh_toast';
             box.textContent = 'ʕ·͡ᴥ·ʔ ' + text;
             box.style.cssText = 'position:fixed;z-index:2147483647;top:18px;right:18px;max-width:340px;'
                 + 'padding:10px 14px;border-radius:6px;font:13px/1.45 Arial,sans-serif;color:#fff;'
@@ -4693,8 +4899,13 @@
             if (!user || !user._id) throw new Error('eigener Benutzer nicht gefunden');
 
             const today = new Date();
-            const from = cbWhIso(cbWhAddDays(today, -180));
-            const to = cbWhIso(cbWhAddDays(today, 240));
+            // Genau der Zeitraum, den das Panel blättern kann (navLimits): 1. Januar des
+            // laufenden Jahres bis 30. Juni des Folgejahres, mit etwas Luft an beiden Enden.
+            // Vorher waren es today-180 bis today+240 Tage – damit fehlten Abwesenheiten aus
+            // Januar bis Anfang März, sobald das Jahr weit genug fortgeschritten war,
+            // obwohl man dorthin blättern kann.
+            const from = cbWhIso(new Date(today.getFullYear(), 0, 1, 12, 0, 0));
+            const to = cbWhIso(new Date(today.getFullYear() + 1, 6, 7, 12, 0, 0));
 
             const absRes = await api('v2/absences', {
                 skip: 0,
@@ -4791,7 +5002,10 @@
         const MANUAL_KEY = 'cb_wh_manual';      // { '2026-KW32': [ { h: 1.5, note: '...' } ] }
         const TYPE_KEY = 'cb_wh_daytypes';      // { 'YYYY-MM-DD': 'urlaub' } manuelle Tages-Typen
         const ABSENCE_KEY = 'cb_absence_data';  // von cbAbsenceSync() gefuellt
+        const CARRY_KEY = 'cb_wh_carry';        // { week: '2026-KW36', items: [ { from: '2026-KW35', h: 1.5 } ] }
+        const PLAN_KEY = 'cb_wh_plan';          // { 'YYYY-MM-DD': Minuten } vorausgesehene (feste) Arbeitszeit
         const DAY_LABELS = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
+        const MAX_DAY_MIN = 600; // ArbZG: mehr als 10 Std. am Tag sind nicht zulässig
 
         const DAY_TYPES = [ // manuelle Tages-Typen (Klick auf einen Tag im Mini-Kalender)
             { id: 'auto', label: 'automatisch (absence.io)', short: '', color: '' },
@@ -4818,7 +5032,8 @@
             workReasons: settings.absence_work_reasons || ['Office', 'Mobile Office'],
             countHolidays: settings.absence_count_holidays !== false,
             includePending: settings.absence_include_pending !== false,
-            mode: settings.absence_hours_mode || 'max'
+            mode: settings.absence_hours_mode || 'max',
+            untilHours: numOr(settings.week_until_hours, 4) // Schwelle für die Feierabend-Uhrzeit
         });
 
         const lsGet = (key, fallback) => {
@@ -4848,7 +5063,7 @@
             if (!Object.keys(seen).length) return false;
             const store = lsGet(TRACKED_KEY, {});
             Object.keys(seen).forEach(iso => { store[iso] = seen[iso]; });
-            const limit = cbWhIso(cbWhAddDays(new Date(), -200)); // alte Tage aufräumen
+            const limit = cbWhIso(navLimits().start); // alles vor dem 1. Januar des laufenden Jahres aufräumen
             Object.keys(store).forEach(iso => { if (iso < limit) delete store[iso]; });
             lsSet(TRACKED_KEY, store);
             return true;
@@ -4862,17 +5077,168 @@
 
         // Anzeige-Modi (Zahnrad im Panel-Kopf)
         const VIEW_OPTIONS = [
-            { id: 'week', label: 'Wochen-Übersicht' },
-            { id: 'month', label: 'Monats-Übersicht' }
+            { id: 'week', label: 'Wochen-Übersicht', short: 'Woche' },
+            { id: 'month', label: 'Monats-Übersicht', short: 'Monat' }
         ];
         const SCOPE_OPTIONS = [
-            { id: 'week', label: 'nur Woche' },
-            { id: 'month', label: 'nur Monat' },
-            { id: 'both', label: 'beide (Woche groß, Monat klein)' }
+            { id: 'week', label: 'nur Woche', short: 'Woche' },
+            { id: 'month', label: 'nur Monat', short: 'Monat' },
+            { id: 'both', label: 'beide (Woche groß, Monat klein)', short: 'beide' }
         ];
+        // ── Tastatur-Steuerung ──
+        const KEY_ACTIONS = [
+            { id: 'nav_prev', label: 'eine Woche / einen Monat zurück', def: 'ArrowLeft' },
+            { id: 'nav_next', label: 'eine Woche / einen Monat vor', def: 'ArrowRight' },
+            { id: 'nav_today', label: 'zurück zu heute', def: 't' },
+            { id: 'view_toggle', label: 'zwischen Wochen- und Monats-Ansicht wechseln', def: 'm' },
+            { id: 'cal_toggle', label: 'Mini-Kalender ein-/ausklappen', def: 'Enter' }
+        ];
+        let keyCapture = null; // id der Aktion, die gerade auf eine neue Taste wartet
+
+        const keyMap = () => { // gespeicherte Belegung, fehlende Einträge kommen vom Default
+            const saved = (settings.keys && typeof settings.keys === 'object') ? settings.keys : {};
+            const map = {};
+            KEY_ACTIONS.forEach(action => {
+                map[action.id] = Object.prototype.hasOwnProperty.call(saved, action.id) ? saved[action.id] : action.def;
+            });
+            return map;
+        };
+        const sameKey = (a, b) => !!a && !!b && String(a).toLowerCase() === String(b).toLowerCase();
+
+        const KEY_NAMES = { // Anzeige-Text für Tasten ohne eigenes Zeichen
+            ArrowLeft: '←', ArrowRight: '→', ArrowUp: '↑', ArrowDown: '↓', ' ': 'Space',
+            Escape: 'Esc', Tab: 'Tab', Backspace: '⌫', Delete: 'Del',
+            Home: 'Home', End: 'End', PageUp: 'PgUp', PageDown: 'PgDn'
+        };
+        const keyLabel = (key) => {
+            if (!key) return '–';
+            if (KEY_NAMES[key]) return KEY_NAMES[key];
+            return key.length === 1 ? key.toUpperCase() : key;
+        };
+        // Enter bekommt die typische ISO-Form (Umbruch-Taste) statt einer Beschriftung
+        const ENTER_SVG = '<svg viewBox="0 0 22 18" width="22" height="18">'
+            + '<path d="M5.5 1.5H20.5V16.5H1.5V8.5H5.5Z" fill="#fbfcfd" stroke="#c3c9d2" stroke-width="1.2" stroke-linejoin="round"/>'
+            + '<path d="M15 5.6V10.3H9.3M11.7 7.9L9.1 10.3L11.7 12.7" fill="none" stroke="#555" stroke-width="1.2"'
+            +     ' stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+        const keyCapHtml = (id) => { // eine Taste als Keycap
+            const action = KEY_ACTIONS.filter(entry => entry.id === id)[0];
+            if (!action) return '';
+            const key = keyMap()[id];
+            return '<a class="cb_wh_key' + (key === 'Enter' ? ' cb_wh_keyenter' : '') + (key ? '' : ' cb_wh_keyoff') + '"'
+                + ' data-key="' + id + '" title="' + esc(action.label + ' – klicken, dann neue Taste drücken') + '">'
+                + (key === 'Enter' ? ENTER_SVG : esc(keyLabel(key))) + '</a>';
+        };
+        const repaintKeyCaps = () => { // Keycaps im offenen Popup neu beschriften
+            const box = document.querySelector('.cb_wh_cfgbox');
+            if (!box) return;
+            const map = keyMap();
+            box.querySelectorAll('a[data-key]').forEach(link => {
+                const id = link.getAttribute('data-key');
+                const key = map[id];
+                const catching = keyCapture === id;
+                link.classList.toggle('cb_wh_keycatch', catching);
+                link.classList.toggle('cb_wh_keyenter', !catching && key === 'Enter');
+                link.classList.toggle('cb_wh_keyoff', !catching && !key);
+                link.innerHTML = catching ? '…' : (key === 'Enter' ? ENTER_SVG : esc(keyLabel(key)));
+            });
+        };
+
+        // ── Mini-Kalender ein-/ausklappen ──
+        const CALOPEN_KEY = 'cb_wh_calopen';
+        const CAL_START_OPTIONS = [
+            { id: 'closed', label: 'eingeklappt starten', short: 'ja' },
+            { id: 'open', label: 'ausgeklappt starten', short: 'nein' }
+        ];
+        const CAL_MEMORY_OPTIONS = [
+            { id: 'on', label: 'Umklappen merken', short: 'merken' },
+            { id: 'off', label: 'Umklappen nicht merken', short: 'nicht' }
+        ];
+        // nur in der Monats-Ansicht sinnvoll: was der eingeklappte Kalender übrig laesst
+        const CAL_FOLD_OPTIONS = [
+            { id: 'week', label: 'eingeklappt nur die aktuelle Woche zeigen', short: 'Woche' },
+            { id: 'none', label: 'eingeklappt gar keinen Kalender zeigen', short: 'nichts' }
+        ];
+        const calFoldWeek = () => settings.cal_collapsed_mode === 'week';
+        const calRemember = () => settings.cal_remember !== 'off';
+        // Achtung: die settings kommen erst kurz nach dem Seitenstart aus dem localStorage.
+        // Deshalb wird die Vorgabe bei jedem Aufruf frisch gelesen und NICHT gecacht –
+        // gecacht wird nur, was der Nutzer in dieser Sitzung selbst umgeschaltet hat.
+        let calOpen = null; // null = noch nichts umgeschaltet
+        const calIsOpen = () => {
+            if (calOpen !== null) return calOpen;
+            if (calRemember()) {
+                const stored = lsGet(CALOPEN_KEY, null);
+                if (stored !== null) return !!stored;
+            }
+            return settings.cal_collapsed !== 'closed';
+        };
+        const toggleCal = () => {
+            calOpen = !calIsOpen();
+            if (calRemember()) lsSet(CALOPEN_KEY, calOpen);
+        };
+        const resetCalOpen = (dropStored) => { // nach einer Einstellungs-Änderung neu bestimmen
+            if (dropStored) { try { localStorage.removeItem(CALOPEN_KEY); } catch (e) {} }
+            calOpen = null;
+        };
+
         const viewMode = () => settings.week_view === 'month' ? 'month' : 'week';
         const scopeMode = () => (settings.week_hours_scope === 'month' || settings.week_hours_scope === 'both')
             ? settings.week_hours_scope : 'week';
+
+        // ── Blättern durch Wochen / Monate ──
+        // Erlaubter Zeitraum: 1. Januar des laufenden Jahres bis 30. Juni des Folgejahres
+        const navLimits = () => {
+            const now = new Date();
+            return {
+                start: new Date(now.getFullYear(), 0, 1, 12, 0, 0),
+                end: new Date(now.getFullYear() + 1, 5, 30, 12, 0, 0)
+            };
+        };
+
+        let navDate = null; // null = heute, sonst ein Tag aus der angezeigten Woche / dem angezeigten Monat
+        const refDate = () => navDate || new Date();
+
+        const clampNav = (date) => {
+            const lim = navLimits();
+            if (date < lim.start) return new Date(lim.start.getTime());
+            if (date > lim.end) return new Date(lim.end.getTime());
+            return date;
+        };
+
+        const stepDate = (step) => { // eine Woche bzw. einen Monat weiter
+            const ref = refDate();
+            if (viewMode() !== 'month') return cbWhAddDays(ref, step * 7);
+            // Tag im Monat beibehalten, sonst landet "vor" nach "zurück" auf dem 1.
+            // und die Wochen-Anzeige zeigt plötzlich eine andere Woche als vorher
+            const target = new Date(ref.getFullYear(), ref.getMonth() + step, 1, 12, 0, 0);
+            const lastDay = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
+            target.setDate(Math.min(ref.getDate(), lastDay));
+            return target;
+        };
+
+        const canShift = (step) => { // liegt der Nachbar-Zeitraum noch im erlaubten Bereich?
+            const lim = navLimits(), next = stepDate(step);
+            if (viewMode() === 'month') {
+                const firstOfNext = new Date(next.getFullYear(), next.getMonth(), 1, 12, 0, 0);
+                return firstOfNext >= new Date(lim.start.getFullYear(), lim.start.getMonth(), 1, 12, 0, 0)
+                    && firstOfNext <= new Date(lim.end.getFullYear(), lim.end.getMonth(), 1, 12, 0, 0);
+            }
+            const week = cbWhWeekInfo(next);
+            return cbWhAddDays(week.monday, 6) >= lim.start && week.monday <= lim.end;
+        };
+
+        const shiftNav = (step) => {
+            navDate = clampNav(stepDate(step));
+            if (isCurrentPeriod()) navDate = null; // wieder im aktuellen Zeitraum -> zurück auf heute
+        };
+
+        const isCurrentPeriod = () => {
+            if (!navDate) return true;
+            const now = new Date();
+            if (viewMode() === 'month') return navDate.getMonth() === now.getMonth() && navDate.getFullYear() === now.getFullYear();
+            return cbWhIso(cbWhWeekInfo(navDate).monday) === cbWhIso(cbWhWeekInfo(now).monday);
+        };
 
         const monthInfo = (date) => { // erster/letzter Tag, Arbeitstage und Label des Monats
             const first = new Date(date.getFullYear(), date.getMonth(), 1, 12, 0, 0);
@@ -4904,13 +5270,140 @@
             tracked: lsGet(TRACKED_KEY, {}),
             overrides: lsGet(TYPE_KEY, {}),
             manualAll: lsGet(MANUAL_KEY, {}),
+            plans: lsGet(PLAN_KEY, {}),
             absence: cbWhGmGet(ABSENCE_KEY, null),
             todayIso: cbWhIso(new Date())
         });
 
+        // ── Drag-Auswahl im Mini-Kalender (linke Maustaste halten und ziehen) ──
+        let dragFrom = null;   // ISO des Tages, auf dem die Maustaste gedrueckt wurde
+        let dragTo = null;     // ISO des Tages, auf dem die Maus zuletzt war
+        let dragging = false;  // Maustaste ist gerade unten
+        let dragMoved = false; // es wurde ueber mindestens einen weiteren Tag gezogen
+        let dragBound = false; // document-Listener nur einmal haengen
+        let dragSkipClick = false; // Klick nach einem Drag nicht als Einzelklick werten
+        let dragAdd = false;   // Strg beim Start -> zur bestehenden Auswahl dazu
+        let pickSet = [];      // fertige Auswahl (Drag-Bereich und/oder per Strg gesammelte Tage)
+
+        // Waehrend des Umschaltens liegt eine Kopie des alten Kalenders im Panel (Geist).
+        // Deren Zellen duerfen bei Auswahl und Events nicht mitzaehlen.
+        const dayCells = (panel) => Array.prototype.slice.call(panel.querySelectorAll('.cb_wh_day'))
+            .filter(cell => !cell.closest('.cb_wh_calghost'));
+
+        const clearPick = () => { // Auswahl aufheben
+            dragFrom = null;
+            dragTo = null;
+            pickSet = [];
+            const panel = document.getElementById(PANEL_ID);
+            if (!panel) return;
+            panel.querySelectorAll('.cb_wh_day.cb_wh_pick').forEach(cell => cell.classList.remove('cb_wh_pick'));
+            panel.querySelectorAll('.cb_wh_cal').forEach(cal => cal.classList.remove('cb_wh_drag'));
+        };
+
+        const togglePick = (iso) => { // einzelnen Tag zur Auswahl dazu / raus
+            const at = pickSet.indexOf(iso);
+            if (at < 0) pickSet.push(iso); else pickSet.splice(at, 1);
+            pickSet.sort(); // ISO-Datum sortiert sich von allein chronologisch
+        };
+
+        const pickRange = () => { // ISO-Grenzen der Auswahl (egal in welche Richtung gezogen wurde)
+            if (!dragFrom || !dragTo) return null;
+            return dragFrom <= dragTo ? { lo: dragFrom, hi: dragTo } : { lo: dragTo, hi: dragFrom };
+        };
+
+        const pickedIsos = () => { // alle sichtbaren Tage innerhalb der Auswahl, in Kalender-Reihenfolge
+            const panel = document.getElementById(PANEL_ID);
+            const range = pickRange();
+            if (!panel || !range) return [];
+            return dayCells(panel)
+                .map(cell => cell.getAttribute('data-iso'))
+                .filter(iso => iso && iso >= range.lo && iso <= range.hi);
+        };
+
+        const paintPick = () => { // Auswahl im Kalender markieren (fertige + gerade gezogene)
+            const panel = document.getElementById(PANEL_ID);
+            const range = dragging ? pickRange() : null;
+            if (!panel) return;
+            dayCells(panel).forEach(cell => {
+                const iso = cell.getAttribute('data-iso');
+                const inDrag = range && iso >= range.lo && iso <= range.hi;
+                if (inDrag || pickSet.indexOf(iso) > -1) cell.classList.add('cb_wh_pick');
+                else cell.classList.remove('cb_wh_pick');
+            });
+        };
+
+        // ── vorausgesehene (feste) Arbeitszeit pro Tag ──
+        const planOf = (iso) => { // gesetzte Minuten oder 0
+            const value = lsGet(PLAN_KEY, {})[iso];
+            return typeof value === 'number' && value > 0 ? value : 0;
+        };
+        const setPlan = (isos, minutes) => { // fuer alle uebergebenen Tage setzen (0 entfernt sie)
+            const store = lsGet(PLAN_KEY, {});
+            isos.forEach(iso => {
+                if (!minutes || minutes <= 0) delete store[iso];
+                else store[iso] = Math.round(minutes);
+            });
+            const limit = cbWhIso(navLimits().start);
+            Object.keys(store).forEach(key => { if (key < limit) delete store[key]; });
+            lsSet(PLAN_KEY, store);
+        };
+        const clockIn = (minutes) => { // jetzt + Minuten -> 'HH:MM'
+            const time = new Date(Date.now() + Math.round(minutes) * 60000);
+            return cbWhPad(time.getHours()) + ':' + cbWhPad(time.getMinutes());
+        };
+
+        // Feierabend-Hinweis: die offenen Minuten aendern sich nicht, nur die Uhrzeit
+        // laeuft weiter -> Text merken und die Uhrzeit per Timer nachziehen
+        let untilState = null; // { prefix: '', suffix: ' Uhr', min: 185, title: '...' }
+        const untilText = (state) => (state.prefix || '') + clockIn(state.min) + (state.suffix || '');
+        const paintUntil = () => {
+            const panel = document.getElementById(PANEL_ID);
+            const box = panel ? panel.querySelector('.cb_wh_rest b small') : null;
+            if (!box || !untilState) return;
+            box.textContent = untilText(untilState);
+        };
+
+        // Eingabezeile fuer die feste Arbeitszeit (im Tages- und im Mehrtage-Menü)
+        const planRowHtml = (minutes, count) => '<b>Feste Arbeitszeit' + (count > 1 ? ' · ' + count + ' Tage' : '') + '</b>'
+            + '<div class="cb_wh_planrow">'
+            +     '<input type="text" class="form-control cb_wh_plan" value="' + esc(minutes ? cbWhFmt(minutes) : '') + '" placeholder="z.B. 8:00">'
+            +     '<em>Std. pro Tag</em>'
+            +     '<button type="button" class="btn btn-default cb_wh_planok" title="übernehmen">OK</button>'
+            + '</div>'
+            + (minutes ? '<a class="cb_wh_planoff"><i style="background:transparent"></i>feste Arbeitszeit entfernen</a>' : '');
+
+        const bindPlanRow = (menu, isos, done) => {
+            const input = menu.querySelector('.cb_wh_plan');
+            if (!input) return;
+            const apply = () => {
+                const hours = parseHours(input.value);
+                if (input.value.trim() && (hours === null || hours <= 0)) {
+                    cbWhToast('Bitte eine Arbeitszeit angeben, z.B. 8 oder 7:48', false);
+                    return;
+                }
+                setPlan(isos, hours ? hours * 60 : 0);
+                done();
+            };
+            menu.querySelector('.cb_wh_planok').addEventListener('click', apply);
+            input.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); apply(); } });
+            const off = menu.querySelector('.cb_wh_planoff');
+            if (off) off.addEventListener('click', () => { setPlan(isos, 0); done(); });
+        };
+
         const closeMenus = () => { // Tages-Menü und Einstellungs-Popup schließen
             document.querySelectorAll('.cb_wh_menu').forEach(old => old.remove());
             document.querySelectorAll('#' + PANEL_ID + ' .cb_wh_cfg').forEach(cog => cog.classList.remove('cb_wh_open'));
+            keyCapture = null; // Popup zu -> keine Tasten-Aufnahme mehr offen
+            clearPick();
+        };
+
+        // Anteil eines Tages als kurzer Vorsatz für die Beschriftung
+        const shareLabel = (share) => {
+            if (share >= 0.97) return '';
+            if (Math.abs(share - 0.5) < 0.06) return '½ ';
+            if (Math.abs(share - 0.25) < 0.06) return '¼ ';
+            if (Math.abs(share - 0.75) < 0.06) return '¾ ';
+            return Math.round(share * 100) + '% ';
         };
 
         // ── ein einzelner Tag: gestempelte Zeit + angerechnete Abwesenheiten ──
@@ -4924,12 +5417,16 @@
                 isWeekend: isWeekend, isToday: iso === st.todayIso, isFuture: iso > st.todayIso,
                 trackedMin: typeof st.tracked[iso] === 'number' ? st.tracked[iso] : null,
                 override: st.overrides[iso] || '', creditMin: 0, chips: [], notes: [],
+                planMin: (st.plans && typeof st.plans[iso] === 'number' && st.plans[iso] > 0) ? st.plans[iso] : 0,
+                overLong: false, absShare: 0, partial: false,
                 homeoffice: false, pending: false, color: ''
             };
+            if (day.planMin) day.notes.push('feste Arbeitszeit: ' + cbWhFmt(day.planMin));
             const override = day.override && day.override !== 'auto' ? typeById(day.override) : null;
 
             if (override && override.id !== 'arbeit') { // manuell gesetzter Abwesenheitstag
                 day.creditMin = isWeekend ? 0 : dayMin;
+                day.absShare = isWeekend ? 0 : 1; // manuell gesetzte Typen gelten für den ganzen Tag
                 day.chips.push(override.short || override.label);
                 day.color = override.color;
                 day.notes.push(override.label + ' (manuell gesetzt)');
@@ -4948,8 +5445,14 @@
                         return;
                     }
                     const hours = entry.hourly && entry.hours ? entry.hours : c.dayHours * (entry.ratio || 1);
-                    if (!isWeekend) day.creditMin += Math.round(hours * 60);
-                    day.chips.push(reason);
+                    // Anteil am Arbeitstag: 0,5 bei einem halben Tag, bei stundenweisen
+                    // Abwesenheiten aus der Länge gerechnet
+                    const share = c.dayHours > 0 ? Math.min(1, hours / c.dayHours) : 1;
+                    if (!isWeekend) {
+                        day.creditMin += Math.round(hours * 60);
+                        day.absShare += share;
+                    }
+                    day.chips.push(shareLabel(share) + reason);
                     day.color = day.color || entry.color || '#3ba55d';
                     if (entry.status === 0) { day.pending = true; day.notes.push(reason + ' (offene Anfrage)'); }
                     else day.notes.push(reason);
@@ -4957,6 +5460,7 @@
                 const holiday = st.absence && st.absence.holidays ? st.absence.holidays[iso] : null;
                 if (holiday && c.countHolidays && !isWeekend && day.creditMin < dayMin) {
                     day.creditMin = dayMin;
+                    day.absShare = 1;
                     day.chips.push('Feiertag');
                     day.color = day.color || '#8a7bd8';
                     day.notes.push('Feiertag: ' + holiday);
@@ -4966,10 +5470,20 @@
             }
             if (day.creditMin > dayMin) day.creditMin = dayMin;
 
+            // Teil-Abwesenheit (halber Tag, stundenweise): der Rest des Tages wurde ja
+            // gearbeitet -> gestempelte und angerechnete Zeit gehören zusammen. Der
+            // Einstellungs-Modus regelt nur noch die ganztägigen Abwesenheiten.
+            day.partial = day.absShare > 0.02 && day.absShare < 0.97;
+
             const trackedMin = day.trackedMin || 0;
-            if (c.mode === 'sum') day.totalMin = trackedMin + day.creditMin;
+            if (day.partial) day.totalMin = trackedMin + day.creditMin;
+            else if (c.mode === 'sum') day.totalMin = trackedMin + day.creditMin;
             else if (c.mode === 'credit') day.totalMin = day.creditMin > 0 ? day.creditMin : trackedMin;
             else day.totalMin = Math.max(trackedMin, day.creditMin); // 'max' (Standard)
+            if (day.totalMin > MAX_DAY_MIN) { // 10-Stunden-Grenze
+                day.overLong = true;
+                day.notes.push('über 10 Std. – nach ArbZG nicht zulässig');
+            }
             return day;
         };
 
@@ -4992,18 +5506,26 @@
         const openWorkdays = (days, st, dayMin) => days.filter(day =>
             !day.isWeekend && day.iso >= st.todayIso && day.creditMin < dayMin / 2).length;
 
-        const calcWeek = () => {
+        const calcWeek = (ref, withCarry) => {
             const c = cfg(), st = stores();
-            const week = cbWhWeekInfo(new Date());
+            const week = cbWhWeekInfo(ref || new Date());
             const dayMin = Math.round(c.dayHours * 60);
             const range = calcRange(week.monday, 7, c, st, false);
-            const manual = st.manualAll[week.key] || [];
-            const manualMin = manual.reduce((total, item) => total + Math.round((Number(item.h) || 0) * 60), 0);
+            const manual = (st.manualAll[week.key] || []).map((item, index) => ({ item: item, key: week.key, index: index }));
+            const manualOwnMin = manual.reduce((total, entry) => total + Math.round((Number(entry.item.h) || 0) * 60), 0);
+            // Uebertrag aus abgelaufenen Wochen (liegt immer in der aktuellen Woche)
+            const carryState = withCarry === false ? { week: '', items: [] } : carryLoad();
+            const carryList = (carryState.week && carryState.week === week.key)
+                ? carryState.items.map((item, index) => ({ item: item, key: week.key, index: index, carry: true }))
+                : [];
+            const carryMin = carryList.reduce((total, entry) => total + Math.round((Number(entry.item.h) || 0) * 60), 0);
+            const manualAll = carryList.concat(manual);
+            const manualMin = manualOwnMin + carryMin;
             const targetMin = Math.round(c.weekHours * 60);
             const doneMin = range.sum + manualMin;
             return {
                 scope: 'week', week: week, month: null, days: range.days,
-                manual: manual, manualMin: manualMin,
+                manual: manualAll, manualMin: manualMin, carryMin: carryMin,
                 targetMin: targetMin, doneMin: doneMin, restMin: targetMin - doneMin,
                 openDays: openWorkdays(range.days, st, dayMin), noData: range.noData,
                 dayMin: dayMin, cfg: c, absence: st.absence,
@@ -5012,22 +5534,22 @@
             };
         };
 
-        const calcMonth = () => {
+        const calcMonth = (ref) => {
             const c = cfg(), st = stores();
-            const info = monthInfo(new Date());
+            const info = monthInfo(ref || new Date());
             const dayMin = Math.round(c.dayHours * 60);
             const range = calcRange(info.first, info.dayCount, c, st, true);
             // manuelle Korrekturen haengen an der Kalenderwoche -> eine Woche zaehlt zu dem
             // Monat, in dem ihr Mittwoch liegt (so wird keine Woche doppelt gezaehlt)
             const manual = [];
             let manualMin = 0;
-            Object.keys(st.manualAll).forEach(key => {
+            Object.keys(st.manualAll).sort().forEach(key => {
                 const monday = mondayOfWeekKey(key);
                 if (!monday) return;
                 const wednesday = cbWhAddDays(monday, 2);
                 if (wednesday.getMonth() !== info.month || wednesday.getFullYear() !== info.year) return;
-                (st.manualAll[key] || []).forEach(item => {
-                    manual.push(item);
+                (st.manualAll[key] || []).forEach((item, index) => {
+                    manual.push({ item: item, key: key, index: index });
                     manualMin += Math.round((Number(item.h) || 0) * 60);
                 });
             });
@@ -5043,11 +5565,78 @@
             };
         };
 
+        // ── Übertrag: Plus-/Minusstunden aus abgelaufenen Wochen ──
+        // Beim Start einer neuen Woche wird der Saldo (Ist - Soll) jeder abgelaufenen
+        // Woche als eigener Eintrag in die aktuelle Woche uebernommen. Alles liegt im
+        // localStorage unter CARRY_KEY und kann in der Liste einzeln per X geloescht werden.
+        const CARRY_MAX = 26; // mehr als ein halbes Jahr Übertraege braucht niemand
+
+        const carryLoad = () => {
+            const state = lsGet(CARRY_KEY, null);
+            if (!state || typeof state !== 'object' || !Array.isArray(state.items)) return { week: '', items: [] };
+            return { week: String(state.week || ''), items: state.items };
+        };
+        const carrySave = (state) => lsSet(CARRY_KEY, state);
+
+        const carryLabel = (key) => { // '2026-KW35' -> 'Übertrag KW 35'
+            const kw = parseInt(String(key || '').split('-KW')[1], 10);
+            return 'Übertrag' + (isFinite(kw) ? ' KW ' + kw : '');
+        };
+        const carryWhen = (key) => { // Monat + Jahr, in dem die Stunden entstanden sind
+            const monday = mondayOfWeekKey(key);
+            if (!monday) return '';
+            const thursday = cbWhAddDays(monday, 3); // die Woche gehoert zum Monat des Donnerstags
+            return MONTH_NAMES[thursday.getMonth()] + ' ' + thursday.getFullYear();
+        };
+
+        // Saldo einer Woche ohne die Übertraege (sonst wuerde doppelt gezaehlt)
+        const weekBalanceMin = (monday) => {
+            const data = calcWeek(monday, false);
+            const hasData = data.days.some(day => day.trackedMin !== null || day.creditMin > 0) || data.manual.length > 0;
+            if (!hasData) return null; // Woche komplett ohne Daten -> kein Minus erfinden
+            return data.doneMin - data.targetMin;
+        };
+
+        const syncCarry = () => {
+            const cur = cbWhWeekInfo(new Date());
+            const state = carryLoad();
+            let changed = false;
+            const push = (info) => {
+                const min = weekBalanceMin(info.monday);
+                if (min === null || min === 0) return;
+                state.items.push({ from: info.key, h: Math.round(min / 60 * 100) / 100, ts: Date.now() });
+                changed = true;
+            };
+            if (!state.week) { // erster Lauf nach dem Update: die letzte Woche wird noch mitgenommen
+                push(cbWhWeekInfo(cbWhAddDays(cur.monday, -7)));
+                state.week = cur.key;
+                changed = true;
+            } else if (state.week !== cur.key) { // neue Woche -> alle Wochen seither nachtragen
+                let monday = mondayOfWeekKey(state.week) || cbWhAddDays(cur.monday, -7);
+                for (let i = 0; i < 60 && monday < cur.monday; i++) {
+                    push(cbWhWeekInfo(monday));
+                    monday = cbWhAddDays(monday, 7);
+                }
+                state.week = cur.key;
+                changed = true;
+            }
+            if (state.items.length > CARRY_MAX) { state.items = state.items.slice(-CARRY_MAX); changed = true; }
+            if (changed) carrySave(state);
+            return state;
+        };
+
+
         // ── Styles ──
         const CSS = ''
             + '#cb_wh_panel{margin-bottom:18px;}'
             + '#cb_wh_panel .panel-title{display:flex;align-items:center;gap:6px;}'
             + '#cb_wh_panel .panel-title small{font-weight:400;color:#888;}'
+            // Einklapp-Pfeil: Bootstrap-Caret wie beim .dropdown-toggle, im eingeklappten
+            // Zustand um 90° nach links gedreht (zeigt dann nach rechts)
+            + '#cb_wh_panel .cb_wh_kw{cursor:pointer;}'
+            + '#cb_wh_panel .cb_wh_kw .caret{display:inline-block;margin-left:3px;border-width:.38em .38em 0;'
+            +     'transition:transform .15s;}'
+            + '#cb_wh_panel .cb_wh_kw .caret.cb_wh_shut{transform:rotate(-90deg);}'
             + '#cb_wh_panel .cb_wh_actions{margin-left:auto;display:flex;align-items:center;gap:8px;}'
             + '#cb_wh_panel .cb_wh_actions a{color:#777;text-decoration:none;font-size:13px;cursor:pointer;}'
             + '#cb_wh_panel .cb_wh_actions a:hover,#cb_wh_panel .cb_wh_actions a.cb_wh_open{color:#2A5298;}'
@@ -5057,10 +5646,29 @@
             + '#cb_wh_panel .cb_wh_rest{text-align:center;line-height:1.1;margin-bottom:8px;}'
             + '#cb_wh_panel .cb_wh_rest b{display:block;font-size:30px;font-weight:700;color:#2A5298;}'
             + '#cb_wh_panel .cb_wh_rest.cb_wh_done b{color:#3ba55d;}'
+            + '#cb_wh_panel .cb_wh_rest b small{display:block;font-size:11px;font-weight:400;color:#9aa0a8;letter-spacing:0;margin:0;}'
             + '#cb_wh_panel .cb_wh_rest span{font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.04em;}'
             + '#cb_wh_panel .cb_wh_rest .cb_wh_sub{display:block;font-style:normal;font-size:11px;color:#8a919c;margin-top:4px;text-transform:none;letter-spacing:0;}'
             + '#cb_wh_panel .cb_wh_rest .cb_wh_sub.cb_wh_done{color:#3ba55d;}'
-            + '#cb_wh_panel .cb_wh_bar{height:7px;border-radius:4px;background:#e6e8ec;overflow:hidden;margin:8px 0 6px;}'
+            + '#cb_wh_panel .cb_wh_rest .cb_wh_sub span{font-size:inherit;color:inherit;text-transform:none;letter-spacing:0;}'
+            + '#cb_wh_panel .cb_wh_bar{position:relative;height:10px;border-radius:5px;background:#e6e8ec;overflow:hidden;margin:8px 0 6px;}'
+            // Monatsleiste liegt als Halbton-Raster (Ben-Day dots) ueber der Wochenleiste.
+            // Zwei identische Punkt-Ebenen, die zweite um eine halbe Kachel nach rechts und
+            // unten versetzt -> die Punkte stehen versetzt zueinander.
+            // Beide Abschnitte sind voll breit und werden nur per clip-path beschnitten,
+            // damit das Raster ueber die Farbgrenze hinweg luechenlos durchlaeuft.
+            + '#cb_wh_panel .cb_wh_bar u{position:absolute;left:0;top:0;bottom:0;width:100%;'
+            +     'text-decoration:none;transition:clip-path .3s ease;'
+            +     'background-image:radial-gradient(circle,#fff 0.9px,transparent 1.5px),'
+            +         'radial-gradient(circle,#fff 0.9px,transparent 1.5px);'
+            +     'background-size:6px 6px,6px 6px;background-position:1px 2px,4px 5px;}'
+            // der Teil, der ueber die Wochenleiste hinausragt: Punkte in deren Farbe
+            + '#cb_wh_panel .cb_wh_bar u.cb_wh_bare{'
+            +     'background-image:radial-gradient(circle,#2A5298 0.9px,transparent 1.5px),'
+            +         'radial-gradient(circle,#2A5298 0.9px,transparent 1.5px);}'
+            + '#cb_wh_panel .cb_wh_bar u.cb_wh_bare.cb_wh_over{'
+            +     'background-image:radial-gradient(circle,#3ba55d 0.9px,transparent 1.5px),'
+            +         'radial-gradient(circle,#3ba55d 0.9px,transparent 1.5px);}'
             + '#cb_wh_panel .cb_wh_bar i{display:block;height:100%;background:#2A5298;transition:width .3s;}'
             + '#cb_wh_panel .cb_wh_bar.cb_wh_over i{background:#3ba55d;}'
             + '#cb_wh_panel .cb_wh_bar.cb_wh_mini{height:4px;margin:0 0 6px;background:#eef0f3;}'
@@ -5068,6 +5676,22 @@
             + '#cb_wh_panel .cb_wh_bar.cb_wh_mini.cb_wh_over i{background:#84c9a1;}'
             + '#cb_wh_panel .cb_wh_kpis{display:flex;justify-content:space-between;font-size:11px;color:#777;margin-bottom:10px;}'
             + '#cb_wh_panel .cb_wh_kpis b{display:block;font-size:13px;color:#333;}'
+            + '#cb_wh_panel .cb_wh_kpis span{white-space:nowrap;}'
+            // Die Scrollleiste der Seite darf beim Hoehenwechsel nicht auftauchen und
+            // verschwinden – sonst wird die ganze Bootstrap-Spalte schmaler und das
+            // Panel zappelt in der Breite. Der Platz wird deshalb dauerhaft reserviert.
+            + 'html{scrollbar-gutter:stable;}'
+            // Der Kalender-Bereich steckt in einem Wrapper. Beim Wechsel Monat <-> Woche
+            // wandern die Tage, die es in beiden Ansichten gibt, von ihrer alten an ihre
+            // neue Position (FLIP, siehe animateCal). Der Rest des alten Kalenders liegt
+            // als "Geist" darueber und blendet aus, neue Teile blenden ein.
+            + '#cb_wh_panel .cb_wh_calwrap{position:relative;overflow:hidden;'
+            +     'transition:height .34s cubic-bezier(.4,0,.2,1);}'
+            + '#cb_wh_panel .cb_wh_calghost{position:absolute;left:0;right:0;top:0;pointer-events:none;'
+            +     'opacity:0;transition:opacity .3s ease;}'
+            + '#cb_wh_panel .cb_wh_calwrap.cb_wh_swap .cb_wh_calghost{opacity:1;}'
+            + '#cb_wh_panel .cb_wh_calwrap.cb_wh_swap .cb_wh_fadein{opacity:0;}'
+            + '#cb_wh_panel .cb_wh_fadein{transition:opacity .3s ease;}'
             + '#cb_wh_panel .cb_wh_cal{display:flex;gap:3px;margin:0 0 10px;}'
             + '#cb_wh_panel .cb_wh_cal.cb_wh_grid{display:grid;grid-template-columns:repeat(7,1fr);gap:3px;}'
             + '#cb_wh_panel .cb_wh_cal.cb_wh_grid .cb_wh_dowhead{font-size:9px;text-transform:uppercase;color:#aaa;text-align:center;line-height:1.5;}'
@@ -5080,15 +5704,33 @@
             + '#cb_wh_panel .cb_wh_day.cb_wh_we{background:#f5f6f8;color:#aaa;}'
             + '#cb_wh_panel .cb_wh_day.cb_wh_today{border-color:#2A5298;box-shadow:0 0 0 1px #2A5298 inset;}'
             + '#cb_wh_panel .cb_wh_day.cb_wh_future{opacity:.65;}'
+            + '#cb_wh_panel .cb_wh_cal.cb_wh_drag{user-select:none;-webkit-user-select:none;}'
+            + '#cb_wh_panel .cb_wh_day.cb_wh_pick{border-color:#2A5298;background:#d9e4f5;box-shadow:0 0 0 2px rgba(42,82,152,.45);}'
+            + '#cb_wh_panel .cb_wh_day.cb_wh_pick .cb_wh_val{color:#1d3c73;}'
+            + '#cb_wh_panel .cb_wh_day.cb_wh_pick .cb_wh_dow,#cb_wh_panel .cb_wh_day.cb_wh_pick .cb_wh_num{color:#4a6fa5;}'
+            + '#cb_wh_panel .cb_wh_day.cb_wh_pick.cb_wh_abs{box-shadow:0 0 0 2px #1d3c73;}'
+            + '#cb_wh_panel .cb_wh_day.cb_wh_pick.cb_wh_abs .cb_wh_val{color:#fff;}'
+            + '#cb_wh_panel .cb_wh_day.cb_wh_pick.cb_wh_future{opacity:1;}'
+            + '#cb_wh_panel .cb_wh_day.cb_wh_over10{border-color:#c0392b;}'
+            + '#cb_wh_panel .cb_wh_day.cb_wh_over10 .cb_wh_val{color:#c0392b;}'
+            + '#cb_wh_panel .cb_wh_day.cb_wh_abs.cb_wh_over10{box-shadow:0 0 0 1px #c0392b inset;}'
+            + '#cb_wh_panel .cb_wh_day.cb_wh_abs.cb_wh_over10 .cb_wh_val{color:#ffe0dc;}'
             + '#cb_wh_panel .cb_wh_dow{display:block;font-size:10px;text-transform:uppercase;color:#999;}'
             + '#cb_wh_panel .cb_wh_num{display:block;font-size:11px;color:#bbb;line-height:1;}'
             + '#cb_wh_panel .cb_wh_val{display:block;font-size:12px;font-weight:700;color:#333;margin-top:2px;}'
             + '#cb_wh_panel .cb_wh_day.cb_wh_abs .cb_wh_val{color:#fff;}'
             + '#cb_wh_panel .cb_wh_day.cb_wh_abs{color:#fff;border-color:transparent;}'
             + '#cb_wh_panel .cb_wh_day.cb_wh_abs .cb_wh_dow,#cb_wh_panel .cb_wh_day.cb_wh_abs .cb_wh_num{color:rgba(255,255,255,.85);}'
+            // Teil-Abwesenheit: durchgezogene Linie am unteren Rand
+            + '#cb_wh_panel .cb_wh_day.cb_wh_part{background-repeat:no-repeat;background-position:0 100%;'
+            +     'background-size:100% 4px;}'
+            + '#cb_wh_panel .cb_wh_cal.cb_wh_grid .cb_wh_day.cb_wh_part{background-size:100% 3px;}'
+            + '#cb_wh_panel .cb_wh_day.cb_wh_part .cb_wh_chip{color:#7b828b;}'
             + '#cb_wh_panel .cb_wh_chip{display:block;font-size:9px;line-height:1.2;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}'
             + '#cb_wh_panel .cb_wh_ho{position:absolute;top:1px;right:2px;font-size:9px;opacity:.7;}'
             + '#cb_wh_panel .cb_wh_pend{position:absolute;top:1px;left:2px;font-size:9px;}'
+            + '#cb_wh_panel .cb_wh_plansign{position:absolute;bottom:0;right:3px;font-size:8px;line-height:1;color:#2A5298;}'
+            + '#cb_wh_panel .cb_wh_day.cb_wh_abs .cb_wh_plansign{color:#fff;}'
             + '#cb_wh_panel .cb_wh_manual{border-top:1px solid #eceef1;padding-top:8px;}'
             + '#cb_wh_panel .cb_wh_mhead{display:flex;justify-content:space-between;font-size:11px;color:#777;text-transform:uppercase;letter-spacing:.03em;margin-bottom:5px;}'
             + '#cb_wh_panel .cb_wh_mhead b{color:#333;}'
@@ -5098,10 +5740,14 @@
             + '#cb_wh_panel .cb_wh_add .cb_wh_h{width:52px;text-align:center;flex:0 0 52px;}'
             + '#cb_wh_panel .cb_wh_add .cb_wh_note{flex:1 1 auto;min-width:0;}'
             + '#cb_wh_panel .cb_wh_add button{padding:1px 8px;font-size:14px;line-height:1.4;}'
-            + '#cb_wh_panel .cb_wh_list{list-style:none;margin:6px 0 0;padding:0;font-size:11px;}'
-            + '#cb_wh_panel .cb_wh_list li{display:flex;gap:5px;align-items:center;padding:1px 0;color:#666;}'
+            + '#cb_wh_panel .cb_wh_list{list-style:none;margin:6px -6px 0;padding:0;font-size:11px;}'
+            + '#cb_wh_panel .cb_wh_list li{display:flex;gap:5px;align-items:center;padding:3px 6px;border-radius:3px;color:#666;transition:background .12s;}'
+            + '#cb_wh_panel .cb_wh_list li:hover{background:#f0f2f5;}'
             + '#cb_wh_panel .cb_wh_list li b{color:#333;flex:0 0 auto;}'
             + '#cb_wh_panel .cb_wh_list li em{flex:1 1 auto;font-style:normal;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}'
+            + '#cb_wh_panel .cb_wh_list li small{flex:0 0 auto;color:#9aa1a9;font-size:10px;white-space:nowrap;}'
+            + '#cb_wh_panel .cb_wh_list li.cb_wh_carry b{color:#2A5298;}'
+            + '#cb_wh_panel .cb_wh_list li.cb_wh_carry em{font-style:italic;}'
             + '#cb_wh_panel .cb_wh_del{color:#c0392b;cursor:pointer;opacity:.6;font-size:10px;}'
             + '#cb_wh_panel .cb_wh_del:hover{opacity:1;}'
             + '.cb_wh_menu{position:absolute;z-index:2147483000;background:#fff;border:1px solid #ccd0d6;border-radius:4px;box-shadow:0 6px 18px rgba(0,0,0,.18);padding:4px 0;font:12px/1.5 Arial,sans-serif;min-width:210px;}'
@@ -5110,16 +5756,55 @@
             + '.cb_wh_menu a:hover{background:#eef2f9;}'
             + '.cb_wh_menu a i{width:9px;height:9px;border-radius:50%;display:inline-block;border:1px solid rgba(0,0,0,.15);}'
             + '.cb_wh_menu a.cb_wh_act{font-weight:700;}'
-            + '.cb_wh_cfgbox{min-width:254px;padding:6px 0 10px;}'
-            + '.cb_wh_cfgbox b{padding:8px 12px 4px;}'
-            + '.cb_wh_cfgbox b.cb_wh_first{padding-top:2px;}'
-            + '.cb_wh_cfgbox a i{width:10px;height:10px;background:#fff;border:1px solid #b9c0ca;flex:0 0 auto;}'
-            + '.cb_wh_cfgbox a.cb_wh_act i{background:#2A5298;border-color:#2A5298;box-shadow:0 0 0 2px #fff inset;}'
-            + '.cb_wh_cfgrow{display:flex;align-items:center;gap:6px;padding:2px 12px;color:#555;}'
-            + '.cb_wh_cfgrow label{flex:1 1 auto;margin:0;font-weight:400;}'
-            + '.cb_wh_cfgrow input{flex:0 0 56px;width:56px;height:24px;padding:1px 5px;font-size:12px;text-align:center;}'
-            + '.cb_wh_cfgrow em{color:#999;font-style:normal;font-size:11px;}'
-            + '.cb_wh_cfgnote{padding:8px 12px 0;color:#9aa0a8;font-size:10px;line-height:1.4;}';
+            + '.cb_wh_menu.cb_wh_range{min-width:256px;}'
+            + '.cb_wh_menu .cb_wh_sum{padding:1px 12px 6px;color:#666;font-size:11px;}'
+            + '.cb_wh_menu .cb_wh_sum div{display:flex;justify-content:space-between;gap:12px;padding:1px 0;}'
+            + '.cb_wh_menu .cb_wh_sum div.cb_wh_sumtop{border-top:1px solid #eceef1;margin-top:4px;padding-top:4px;}'
+            + '.cb_wh_menu .cb_wh_sum b{display:inline;padding:0;font-size:11px;color:#222;text-transform:none;}'
+            + '.cb_wh_menu .cb_wh_sumnote{padding:0 12px 6px;color:#9aa0a8;font-size:10px;line-height:1.4;}'
+            + '.cb_wh_menu .cb_wh_planrow{display:flex;align-items:center;gap:6px;padding:1px 12px 5px;}'
+            + '.cb_wh_menu .cb_wh_planrow input{flex:0 0 64px;width:64px;height:24px;padding:1px 5px;font-size:12px;text-align:center;}'
+            + '.cb_wh_menu .cb_wh_planrow em{flex:1 1 auto;font-style:normal;color:#9aa0a8;font-size:10px;}'
+            + '.cb_wh_menu .cb_wh_planrow button{padding:1px 9px;font-size:12px;line-height:1.4;}'
+            + '#cb_wh_panel .cb_wh_nav{display:flex;align-items:center;justify-content:space-between;gap:6px;margin:0 0 7px;font-size:11px;}'
+            + '#cb_wh_panel .cb_wh_nav a{color:#8a919c;text-decoration:none;cursor:pointer;padding:1px 7px;border-radius:3px;line-height:1.6;}'
+            + '#cb_wh_panel .cb_wh_nav a:hover{color:#2A5298;background:#eef2f9;}'
+            + '#cb_wh_panel .cb_wh_nav a.cb_wh_off{opacity:.3;cursor:default;color:#8a919c;background:none;}'
+            + '#cb_wh_panel .cb_wh_nav .cb_wh_now{text-transform:uppercase;letter-spacing:.05em;font-size:10px;}'
+            + '.cb_wh_cfgbox{min-width:266px;max-width:278px;padding:2px 0 6px;}'
+            + '.cb_wh_cfgbox .cb_wh_cfgsec{padding:7px 12px 3px;margin-top:4px;border-top:1px solid #f0f2f5;'
+            +     'color:#9aa0a8;font-size:9px;text-transform:uppercase;letter-spacing:.07em;}'
+            + '.cb_wh_cfgbox .cb_wh_cfgsec.cb_wh_first{margin-top:0;border-top:0;padding-top:5px;}'
+            + '.cb_wh_cfgline{display:flex;align-items:center;gap:6px;padding:2px 12px;color:#555;font-size:11px;}'
+            + '.cb_wh_cfgline label{flex:1 1 auto;margin:0;font-weight:400;white-space:nowrap;}'
+            + '.cb_wh_cfgline input{flex:0 0 44px;width:44px;height:22px;padding:1px 4px;font-size:11px;text-align:center;}'
+            + '.cb_wh_cfgline em{flex:0 0 auto;color:#9aa0a8;font-style:normal;font-size:10px;}'
+            + '.cb_wh_cfgbox .cb_wh_pills{display:flex;gap:2px;flex:0 0 auto;}'
+            + '.cb_wh_cfgbox .cb_wh_pills + .cb_wh_pills{margin-left:7px;}'
+            + '.cb_wh_cfgbox .cb_wh_pills a{display:block;padding:1px 7px;border:1px solid #d5dae1;border-radius:3px;'
+            +     'background:#fff;color:#6b7480;font-size:10px;line-height:1.6;text-decoration:none;cursor:pointer;}'
+            + '.cb_wh_cfgbox .cb_wh_pills a:hover{border-color:#2A5298;color:#2A5298;background:#fff;}'
+            + '.cb_wh_cfgbox .cb_wh_pills a.cb_wh_act{background:#2A5298;border-color:#2A5298;color:#fff;font-weight:400;}'
+            + '.cb_wh_cfgbox .cb_wh_pills.cb_wh_pillsoff{opacity:.4;}'
+            + '.cb_wh_cfgbox .cb_wh_pills.cb_wh_pillsoff a{cursor:default;}'
+            + '.cb_wh_cfgbox .cb_wh_pills.cb_wh_pillsoff a:hover{border-color:#d5dae1;color:#6b7480;background:#fff;}'
+            + '.cb_wh_cfgbox .cb_wh_pills.cb_wh_pillsoff a.cb_wh_act:hover{background:#2A5298;border-color:#2A5298;color:#fff;}'
+            + '.cb_wh_cfgbox .cb_wh_cfgline.cb_wh_lineoff label{color:#b9bfc6;}'
+            // Tastatur-Belegung: die Tasten sehen wie echte Keycaps aus
+            + '.cb_wh_cfgbox .cb_wh_key{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;'
+            +     'min-width:19px;height:18px;padding:0 4px;box-sizing:border-box;border:1px solid #c3c9d2;'
+            +     'border-radius:3px;background:#fbfcfd;box-shadow:0 1px 0 #dfe3e9;color:#555;'
+            +     'font:700 9px/1 Arial,sans-serif;text-decoration:none;cursor:pointer;}'
+            + '.cb_wh_cfgbox .cb_wh_key:hover{border-color:#2A5298;color:#2A5298;background:#fbfcfd;}'
+            + '.cb_wh_cfgbox .cb_wh_key + .cb_wh_key{margin-left:3px;}'
+            + '.cb_wh_cfgbox .cb_wh_key.cb_wh_keyoff{color:#c3c9d2;}'
+            + '.cb_wh_cfgbox .cb_wh_key.cb_wh_keycatch{border-color:#2A5298;color:#2A5298;background:#eef2f9;}'
+            // Enter zeichnet seine Form selbst, deshalb ohne eigenen Rahmen
+            + '.cb_wh_cfgbox .cb_wh_key.cb_wh_keyenter{border:0;background:none;box-shadow:none;'
+            +     'padding:0;min-width:0;height:18px;}'
+            + '.cb_wh_cfgbox .cb_wh_keyenter svg{display:block;}'
+            + '.cb_wh_cfgbox .cb_wh_keyenter:hover svg path{stroke:#2A5298;}'
+            + '.cb_wh_cfgnote{padding:7px 12px 0;color:#b0b6bd;font-size:9px;line-height:1.4;}';
 
         const injectCss = () => {
             if (document.getElementById('cb_wh_css')) return;
@@ -5136,19 +5821,31 @@
             if (day.isWeekend) classes.push('cb_wh_we');
             if (day.isToday) classes.push('cb_wh_today');
             if (day.isFuture) classes.push('cb_wh_future');
-            if (day.chips.length) classes.push('cb_wh_abs');
+            if (day.overLong) classes.push('cb_wh_over10');
+            // ganztägig abwesend -> Zelle voll gefärbt; nur teilweise -> durchgezogene Linie
+            // am unteren Rand (Text bleibt dadurch lesbar), der Anteil steht im Chip
+            if (day.chips.length) classes.push(day.partial ? 'cb_wh_part' : 'cb_wh_abs');
             const value = day.totalMin > 0 ? cbWhFmt(day.totalMin) : (day.trackedMin === null ? '–' : '0:00');
             const title = [day.label + ', ' + day.iso.split('-').reverse().join('.')]
                 .concat(day.trackedMin === null ? ['keine Zeiterfassung vorhanden'] : ['gestempelt: ' + cbWhFmt(day.trackedMin)])
-                .concat(day.creditMin > 0 ? ['angerechnet: ' + cbWhFmt(day.creditMin)] : [])
+                .concat(day.creditMin > 0 ? ['angerechnet: ' + cbWhFmt(day.creditMin)
+                    + (day.partial ? ' (' + shareLabel(day.absShare).trim() + ' Tag)' : '')] : [])
+                .concat(day.partial && day.trackedMin !== null ? ['zusammen: ' + cbWhFmt(day.totalMin)] : [])
                 .concat(day.notes)
-                .concat(['', 'Klick: Tag manuell setzen'])
+                .concat(['', 'Klick: Tag manuell setzen', 'Ziehen: mehrere Tage auswählen',
+                    'Strg + Klick: einzelne Tage sammeln'])
                 .join(NL);
             return '<div class="' + classes.join(' ') + '" data-iso="' + day.iso + '"'
-                + (day.chips.length && day.color ? ' style="background:' + esc(day.color) + '"' : '')
+                + (day.chips.length && day.color
+                    ? (day.partial
+                        ? ' style="background-image:linear-gradient(to right,' + esc(day.color) + ' 0,'
+                            + esc(day.color) + ' 100%)"'
+                        : ' style="background:' + esc(day.color) + '"')
+                    : '')
                 + ' title="' + esc(title) + '">'
                 + (day.homeoffice ? '<span class="cb_wh_ho" title="Office / Mobile Office">⌂</span>' : '')
                 + (day.pending ? '<span class="cb_wh_pend" title="offene Anfrage">•</span>' : '')
+                + (day.planMin ? '<span class="cb_wh_plansign" title="' + esc('feste Arbeitszeit: ' + cbWhFmt(day.planMin)) + '">▪</span>' : '')
                 + (compact ? '' : '<span class="cb_wh_dow">' + day.label + '</span>')
                 + '<span class="cb_wh_num">' + day.dayNum + '.</span>'
                 + '<span class="cb_wh_val">' + value + '</span>'
@@ -5164,16 +5861,139 @@
                 + data.days.map(day => dayCellHtml(day, true)).join('');
         };
 
+        // ── Monats- in Wochen-Ansicht überführen (und zurück) ──
+        // render() ersetzt den ganzen Panel-Inhalt, eine reine CSS-Transition greift da
+        // nicht. Deshalb per FLIP: die Tage, die es in beiden Ansichten gibt, werden auf
+        // ihre alte Position zurückgerechnet und von dort an die neue animiert. Der Rest
+        // des alten Kalenders liegt als "Geist" darüber und blendet aus, neue Teile
+        // (Wochentags-Köpfe, die übrigen Tage des Monats) blenden ein.
+        let lastCalKind = null; // 'month' | 'week' | 'none'
+        let calAnimTimer = null;
+        let navSlide = 0; // -1 = zurück, 1 = vor, 0 = kein Blättern (wird pro Rendern verbraucht)
+
+        const animateCal = (prevH, prevHtml, prevRects, kindChanged, slideDir) => {
+            const panel = document.getElementById(PANEL_ID);
+            const wrap = panel ? panel.querySelector('.cb_wh_calwrap') : null;
+            if (!wrap || prevH === null) return;
+            if (calAnimTimer) { clearTimeout(calAnimTimer); calAnimTimer = null; }
+            const newCal = wrap.querySelector('.cb_wh_cal');
+            // Blättern schiebt seitlich, ein Ansichtswechsel überführt die Tage (FLIP)
+            const slide = (!kindChanged && slideDir && newCal) ? (slideDir > 0 ? 1 : -1) : 0;
+            let moving = [];
+            let ghost = null;
+
+            // Der Startzustand muss VOR der ersten Messung stehen: sobald die Hoehe gelesen
+            // wird, berechnet der Browser die Stile des neuen Kalenders – waeren die dann
+            // schon der Endzustand, gaebe es nichts mehr zu animieren.
+            if (kindChanged) wrap.classList.add('cb_wh_swap'); // vor dem Geist, sonst blendet er nicht
+            if ((kindChanged || slide) && prevHtml) {
+                ghost = document.createElement('div');
+                ghost.className = 'cb_wh_calghost';
+                ghost.innerHTML = prevHtml; // nur Optik, keine Events
+                wrap.appendChild(ghost);
+            }
+            if (kindChanged) {
+                if (ghost && newCal) { // Tage, die wandern, im Geist verstecken (sonst doppelt)
+                    ghost.querySelectorAll('.cb_wh_day').forEach(cell => {
+                        const iso = cell.getAttribute('data-iso');
+                        if (iso && newCal.querySelector('.cb_wh_day[data-iso="' + iso + '"]')) {
+                            cell.style.visibility = 'hidden';
+                        }
+                    });
+                }
+                if (newCal) { // alles, was nicht wandert, blendet ein
+                    Array.prototype.slice.call(newCal.children).forEach(el => {
+                        const iso = el.getAttribute ? el.getAttribute('data-iso') : null;
+                        if (iso && prevRects[iso]) moving.push(el);
+                        else el.classList.add('cb_wh_fadein');
+                    });
+                }
+            }
+            if (slide) { // neu kommt von der Seite herein, alt schiebt zur anderen hinaus
+                newCal.style.transition = 'none';
+                newCal.style.transform = 'translateX(' + (slide * 100) + '%)';
+                newCal.style.opacity = '0';
+                if (ghost) {
+                    ghost.style.transition = 'none';
+                    ghost.style.transform = 'translateX(0)';
+                    ghost.style.opacity = '1';
+                }
+            }
+
+            const newH = wrap.offsetHeight; // opacity/transform aendern das Layout nicht
+            if (!kindChanged && !slide && newH === prevH) return; // nichts verschiebt sich
+
+            // FLIP: Differenz zur alten Position als Transform einfrieren
+            const flip = [];
+            moving.forEach(el => {
+                const from = prevRects[el.getAttribute('data-iso')];
+                const to = el.getBoundingClientRect();
+                if (!to.width || !to.height) return;
+                flip.push({
+                    el: el,
+                    dx: from.left - to.left, dy: from.top - to.top,
+                    sx: from.width / to.width, sy: from.height / to.height
+                });
+            });
+            flip.forEach(item => {
+                item.el.style.transformOrigin = 'top left';
+                item.el.style.transition = 'none';
+                item.el.style.zIndex = '2';
+                item.el.style.transform = 'translate(' + item.dx.toFixed(2) + 'px,' + item.dy.toFixed(2) + 'px)'
+                    + ' scale(' + item.sx.toFixed(4) + ',' + item.sy.toFixed(4) + ')';
+            });
+
+            wrap.style.height = prevH + 'px';
+            void wrap.offsetHeight; // Reflow, sonst springt alles ohne Übergang
+            if (kindChanged) wrap.classList.remove('cb_wh_swap');
+            wrap.style.height = newH + 'px';
+            flip.forEach(item => {
+                item.el.style.transition = 'transform .34s cubic-bezier(.4,0,.2,1)';
+                item.el.style.transform = 'none';
+            });
+            if (slide) {
+                newCal.style.transition = 'transform .34s cubic-bezier(.4,0,.2,1),opacity .24s ease';
+                newCal.style.transform = 'translateX(0)';
+                newCal.style.opacity = '1';
+                if (ghost) {
+                    ghost.style.transition = 'transform .34s cubic-bezier(.4,0,.2,1),opacity .3s ease';
+                    ghost.style.transform = 'translateX(' + (-slide * 100) + '%)';
+                    ghost.style.opacity = '0';
+                }
+            }
+
+            calAnimTimer = setTimeout(() => {
+                calAnimTimer = null;
+                if (!wrap.isConnected) return;
+                wrap.style.height = ''; // wieder auto, damit spätere Inhalte passen
+                wrap.querySelectorAll('.cb_wh_calghost').forEach(old => old.remove());
+                wrap.querySelectorAll('.cb_wh_fadein').forEach(el => el.classList.remove('cb_wh_fadein'));
+                if (newCal) { // Inline-Reste des Seitwaerts-Schiebens entfernen
+                    newCal.style.transform = '';
+                    newCal.style.opacity = '';
+                    newCal.style.transition = '';
+                }
+                flip.forEach(item => {
+                    item.el.style.transform = '';
+                    item.el.style.transition = '';
+                    item.el.style.transformOrigin = '';
+                    item.el.style.zIndex = '';
+                });
+            }, 380);
+        };
+
         // ── Panel-Inhalt zeichnen ──
         const render = () => {
             const panel = document.getElementById(PANEL_ID);
             if (!panel) return;
-            const view = viewMode(), scope = scopeMode();
-            const week = calcWeek();
-            const month = (view === 'month' || scope !== 'week') ? calcMonth() : null;
-            const calData = (view === 'month' && month) ? month : week; // Mini-Kalender
-            const main = (scope === 'month' && month) ? month : week;   // grosse Anzeige
-            const sub = (scope === 'both' && month) ? month : null;     // kleine Zusatzzeile
+            syncCarry(); // Übertraege aus abgelaufenen Wochen aktuell halten
+            const view = viewMode(), scope = scopeMode(), ref = refDate();
+            const isMonthView = view === 'month';
+            const week = calcWeek(ref);
+            const month = (isMonthView || scope !== 'week') ? calcMonth(ref) : null;
+            const calData = (isMonthView && month) ? month : week; // Mini-Kalender
+            const main = (scope === 'month' && month) ? month : week; // grosse Anzeige
+            const sub = (scope === 'both' && month) ? month : null;   // kleine Zusatzzeile
             const isMonth = main.scope === 'month';
 
             const percent = main.targetMin > 0 ? Math.max(0, Math.min(100, Math.round(main.doneMin / main.targetMin * 100))) : 0;
@@ -5183,8 +6003,45 @@
             const subDone = sub ? sub.restMin <= 0 : false;
             const age = main.absence && main.absence.ts ? Math.round((Date.now() - main.absence.ts) / 60000) : null;
 
+            const oldWrap = panel.querySelector('.cb_wh_calwrap');
+            const oldCal = oldWrap ? oldWrap.querySelector('.cb_wh_cal') : null;
+            const prevCalH = oldWrap ? oldWrap.offsetHeight : null; // fuer die Hoehen-Animation
+            const prevCalHtml = oldCal ? oldCal.outerHTML : '';     // alter Kalender als Geist
+            const prevCalRects = {};                                // Startpositionen der Tage
+            if (oldCal) {
+                oldCal.querySelectorAll('.cb_wh_day').forEach(cell => {
+                    const iso = cell.getAttribute('data-iso');
+                    if (!iso) return;
+                    const box = cell.getBoundingClientRect();
+                    prevCalRects[iso] = { left: box.left, top: box.top, width: box.width, height: box.height };
+                });
+            }
+            const calOpenNow = calIsOpen();
+            // eingeklappt: in der Monats-Ansicht optional die aktuelle Woche stehen lassen
+            const calShow = calOpenNow ? calData
+                : ((isMonthView && calFoldWeek()) ? week : null);
+            const calKind = calShow ? calShow.scope : 'none';
+            const calKindChanged = lastCalKind !== null && lastCalKind !== calKind;
+            lastCalKind = calKind;
+            const slideDir = navSlide; // nur für dieses Rendern
+            navSlide = 0;
+
             const heading = panel.querySelector('.cb_wh_kw');
-            if (heading) heading.textContent = calData.label;
+            if (heading) {
+                heading.innerHTML = esc(calData.label)
+                    + ' <span class="caret' + (calOpenNow ? '' : ' cb_wh_shut') + '"></span>';
+                heading.setAttribute('title', calOpenNow ? 'Mini-Kalender einklappen' : 'Mini-Kalender ausklappen');
+                if (!heading.getAttribute('data-cb-bound')) { // sonst haengt der Listener nach jedem Rendern erneut
+                    heading.setAttribute('data-cb-bound', '1');
+                    heading.addEventListener('click', event => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        closeMenus();
+                        toggleCal();
+                        render();
+                    });
+                }
+            }
 
             const icon = panel.querySelector('.cb_wh_sync'); // Infos stecken im Tooltip des Sync-Icons
             if (icon) {
@@ -5201,45 +6058,185 @@
             const sollTitle = isMonth
                 ? 'Monats-Soll: ' + main.month.workdays + ' Arbeitstage × ' + cbWhFmtDec(main.cfg.weekHours / 5) + ' Std.'
                 : 'Wochen-Soll';
+            // Kachel mit dem Soll des ganzen Monats (entfällt, wenn die grosse Anzeige schon der Monat ist)
+
+            // Blätter-Leiste über dem Kalender
+            const lim = navLimits(), prevOk = canShift(-1), nextOk = canShift(1);
+            const stepName = isMonthView ? 'en Monat' : 'e Woche';
+            const prevTitle = prevOk ? 'ein' + stepName + ' zurück' : 'Anfang des Zeitraums (ab Januar ' + lim.start.getFullYear() + ')';
+            const nextTitle = nextOk ? 'ein' + stepName + ' vor' : 'Ende des Zeitraums (bis Juni ' + lim.end.getFullYear() + ')';
+            const entryWeek = cbWhWeekInfo(ref); // neue Korrekturen landen in dieser Woche
+            const manualData = calData.scope === 'month' ? calData : week;
+            const manualTitle = 'Neue Eingaben zählen zur KW ' + entryWeek.kw + ' ('
+                + cbWhIso(entryWeek.monday).split('-').reverse().slice(0, 2).join('.') + '–'
+                + cbWhIso(cbWhAddDays(entryWeek.monday, 6)).split('-').reverse().slice(0, 2).join('.') + ')';
+
+            // ── Feierabend-Hinweis (klein und grau im grossen Rest-Wert) ──
+            // mit fester Arbeitszeit fuer heute: was heute noch fehlt und bis wann
+            // ohne: erst wenn weniger als die eingestellte Schwelle offen ist (week_until_hours)
+            let untilHtml = '';
+            untilState = null;
+            if (isCurrentPeriod()) {
+                const today = calcDay(new Date(), main.cfg, stores());
+                if (today.planMin) {
+                    const leftMin = today.planMin - today.totalMin;
+                    if (leftMin > 0) {
+                        untilState = {
+                            prefix: 'bis ',
+                            suffix: ' Uhr · heute noch ' + cbWhFmt(leftMin),
+                            min: leftMin,
+                            title: 'feste Arbeitszeit heute: ' + cbWhFmt(today.planMin)
+                                + ' · bereits ' + cbWhFmt(today.totalMin) + ' · ohne Pause gerechnet'
+                        };
+                    } else {
+                        untilHtml = '<small title="' + esc('feste Arbeitszeit heute: ' + cbWhFmt(today.planMin)) + '">'
+                            + 'heute erledigt · ' + cbWhFmt(today.totalMin) + '</small>';
+                    }
+                } else if (!restDone && main.restMin > 0 && main.restMin < Math.round(main.cfg.untilHours * 60)) {
+                    untilState = {
+                        prefix: 'bis ',
+                        suffix: ' Uhr',
+                        min: main.restMin,
+                        title: 'offene Stunden ab jetzt gerechnet – ohne Pause'
+                    };
+                }
+            }
+            if (untilState) {
+                untilHtml = '<small title="' + esc(untilState.title) + '">'
+                    + esc(untilText(untilState)) + '</small>';
+            }
 
             panel.querySelector('.panel-body').innerHTML = ''
                 + '<div class="cb_wh_rest' + (restDone ? ' cb_wh_done' : '') + '">'
-                +     '<b>' + (restDone ? '+' + cbWhFmt(-main.restMin) : cbWhFmt(main.restMin)) + '</b>'
+                +     '<b>' + untilHtml + (restDone ? '+' + cbWhFmt(-main.restMin) : cbWhFmt(main.restMin)) + '</b>'
                 +     '<span>' + (restDone ? 'Stunden über dem Soll' : 'Stunden noch offen') + (isMonth ? ' (Monat)' : '')
-                +         (sub ? '<em class="cb_wh_sub' + (subDone ? ' cb_wh_done' : '') + '" title="' + esc(sub.label + ' · Soll ' + cbWhFmt(sub.targetMin)) + '">'
-                +             sub.month.label + ': ' + (subDone ? '+' + cbWhFmt(-sub.restMin) + ' über dem Soll' : cbWhFmt(sub.restMin) + ' offen')
-                +             ' · ' + cbWhFmt(sub.doneMin) + ' / ' + cbWhFmt(sub.targetMin) + '</em>' : '')
+                +         (sub ? '<em class="cb_wh_sub' + (subDone ? ' cb_wh_done' : '') + '">'
+                +             '<span title="Verbleibende Stunden für diesen Monat">'
+                +                 (subDone ? '+' + cbWhFmt(-sub.restMin) + ' über dem Soll' : cbWhFmt(sub.restMin) + ' offen') + '</span>'
+                +             ' · <span title="Gearbeitete Stunden für diesen Monat">' + cbWhFmt(sub.doneMin) + '</span>'
+                +             ' / <span title="Soll des ganzen Monats">' + cbWhFmt(sub.targetMin) + '</span>'
+                +         '</em>' : '')
                 +     '</span>'
                 + '</div>'
-                + '<div class="cb_wh_bar' + (restDone ? ' cb_wh_over' : '') + '"><i style="width:' + percent + '%"></i></div>'
-                + (sub ? '<div class="cb_wh_bar cb_wh_mini' + (subDone ? ' cb_wh_over' : '') + '" title="Fortschritt im ganzen Monat"><i style="width:' + subPercent + '%"></i></div>' : '')
+                + '<div class="cb_wh_bar' + (restDone ? ' cb_wh_over' : '') + '" title="'
+                +         esc((isMonth ? 'Monat: ' : 'Woche: ') + percent + ' %'
+                +             (sub && !isMonth ? ' · Monat: ' + subPercent + ' %' : '')) + '">'
+                +     '<i style="width:' + percent + '%"></i>'
+                // Punkt-Raster in zwei Abschnitten: über der Wochenleiste weiß, auf dem
+                // leeren Balken in der Farbe der Wochenleiste. Beide Ebenen sind voll
+                // breit und werden nur beschnitten – so bleibt das Raster lückenlos.
+                +     (sub ? '<u style="clip-path:inset(0 ' + (100 - Math.min(percent, subPercent)) + '% 0 0)"></u>' : '')
+                +     (sub && subPercent > percent
+                        ? '<u class="cb_wh_bare' + (restDone ? ' cb_wh_over' : '') + '"'
+                            + ' style="clip-path:inset(0 ' + (100 - subPercent) + '% 0 ' + percent + '%)"></u>'
+                        : '')
+                + '</div>'
                 + '<div class="cb_wh_kpis">'
                 +     '<span title="' + esc(sollTitle) + '">Soll' + (isMonth ? ' (Monat)' : '') + '<b>' + cbWhFmt(main.targetMin) + '</b></span>'
-                +     '<span title="Gestempelt + angerechnete Abwesenheiten + manuelle Korrekturen">Ist<b>' + cbWhFmt(main.doneMin) + '</b></span>'
-                +     '<span title="Rest verteilt auf die verbleibenden Arbeitstage (' + main.openDays + ')">&#216; / Tag<b>' + perDay + '</b></span>'
+                +     '<span title="' + (isMonth ? 'Gearbeitete Stunden in diesem Monat' : 'Gearbeitete Stunden diese Woche') + '">Ist<b>' + cbWhFmt(main.doneMin) + '</b></span>'
+                +     '<span title="' + esc('Rest verteilt auf die verbleibenden Arbeitstage ('
+                +         main.openDays + (main.openDays === 1 ? ' Arbeitstag' : ' Arbeitstage') + ')') + '">&#216; / Tag<b>' + perDay + '</b></span>'
                 + '</div>'
-                + '<div class="cb_wh_cal' + (calData.scope === 'month' ? ' cb_wh_grid' : '') + '">' + calHtml(calData) + '</div>'
+                + '<div class="cb_wh_nav">'
+                +     '<a class="cb_wh_prev glyphicon glyphicon-chevron-left' + (prevOk ? '' : ' cb_wh_off') + '" title="' + esc(prevTitle) + '"></a>'
+                +     '<a class="cb_wh_now' + (isCurrentPeriod() ? ' cb_wh_off' : '') + '" title="' + esc(isMonthView ? 'zurück zum aktuellen Monat' : 'zurück zur aktuellen Woche') + '">heute</a>'
+                +     '<a class="cb_wh_next glyphicon glyphicon-chevron-right' + (nextOk ? '' : ' cb_wh_off') + '" title="' + esc(nextTitle) + '"></a>'
+                + '</div>'
+                + '<div class="cb_wh_calwrap">'
+                +     (calShow ? '<div class="cb_wh_cal' + (calShow.scope === 'month' ? ' cb_wh_grid' : '') + '">' + calHtml(calShow) + '</div>' : '')
+                + '</div>'
                 + '<div class="cb_wh_manual">'
-                +     '<div class="cb_wh_mhead"><span title="' + esc('gilt für die laufende Woche (KW ' + week.week.kw + ')') + '">Manuelle Korrektur</span><b>'
-                +         (week.manualMin >= 0 ? '+' : '') + cbWhFmt(week.manualMin)
-                +         (month ? ' <small title="alle Korrekturen des Monats">(Monat ' + (month.manualMin >= 0 ? '+' : '') + cbWhFmt(month.manualMin) + ')</small>' : '')
+                +     '<div class="cb_wh_mhead"><span title="' + esc(manualTitle) + '">Manuelle Korrektur</span><b>'
+                +         (manualData.manualMin >= 0 ? '+' : '') + cbWhFmt(manualData.manualMin)
+                +         ' <small>' + esc(calData.scope === 'month' ? calData.month.label : 'KW ' + week.week.kw) + '</small>'
                 +     '</b></div>'
                 +     '<div class="cb_wh_add">'
-                +         '<input type="text" class="form-control cb_wh_h" placeholder="1,5" title="Stunden (z.B. 1,5 oder 0:30)">'
+                +         '<input type="text" class="form-control cb_wh_h" placeholder="1,5" title="' + esc('Stunden (z.B. 1,5 oder 0:30) – ' + manualTitle) + '">'
                 +         '<input type="text" class="form-control cb_wh_note" placeholder="Notiz (optional)">'
                 +         '<button type="button" class="btn btn-default cb_wh_minus" title="Stunden abziehen">&#8722;</button>'
                 +         '<button type="button" class="btn btn-default cb_wh_plus" title="Stunden hinzufügen">+</button>'
                 +     '</div>'
-                +     (week.manual.length ? '<ul class="cb_wh_list">' + week.manual.map((item, index) => '<li>'
-                            + '<b>' + ((Number(item.h) || 0) >= 0 ? '+' : '') + cbWhFmt((Number(item.h) || 0) * 60) + '</b>'
-                            + '<em>' + esc(item.note || 'Korrektur') + '</em>'
-                            + '<a class="cb_wh_del glyphicon glyphicon-remove" data-index="' + index + '" title="entfernen"></a>'
-                            + '</li>').join('') + '</ul>' : '')
+                + (manualData.manual.length ? '<ul class="cb_wh_list">' + manualData.manual.map(entry => {
+                            const hours = Number(entry.item.h) || 0;
+                            const isCarry = entry.carry === true;
+                            const fromKey = isCarry ? String(entry.item.from || '') : entry.key;
+                            const when = carryWhen(fromKey); // Monat + Jahr der Stunden
+                            const text = isCarry ? carryLabel(fromKey) : (entry.item.note || 'Korrektur');
+                            const tip = (isCarry ? 'Plus-/Minusstunden aus ' : '')
+                                + fromKey.replace('-KW', ', KW ') + (when ? ' · ' + when : '')
+                                + (isCarry ? ' – werden in dieser Woche mitgezählt' : '');
+                            return '<li' + (isCarry ? ' class="cb_wh_carry"' : '') + '>'
+                                + '<b>' + (hours >= 0 ? '+' : '') + cbWhFmt(hours * 60) + '</b>'
+                                + '<em title="' + esc(tip) + '">' + esc(text) + '</em>'
+                                + (when ? '<small>' + esc(when) + '</small>' : '')
+                                + '<a class="cb_wh_del glyphicon glyphicon-remove" data-week="' + entry.key + '" data-index="' + entry.index + '"'
+                                    + (isCarry ? ' data-carry="1"' : '') + ' title="entfernen"></a>'
+                                + '</li>';
+                        }).join('') + '</ul>' : '')
                 + '</div>';
 
+            // direkt nach dem Austausch, bevor irgendetwas anderes Stile berechnen kann
+            animateCal(prevCalH, prevCalHtml, prevCalRects, calKindChanged, slideDir);
             bindEvents(panel);
+            paintPick(); // eine bestehende Auswahl nach dem Neuzeichnen wieder markieren
         };
 
+
+        // ── Zusammenfassung als Text in die Zwischenablage ──
+        const fallbackCopy = (text, done) => { // aelterer Weg, falls die Clipboard-API blockt
+            try {
+                const area = document.createElement('textarea');
+                area.value = text;
+                area.style.cssText = 'position:fixed;top:-1000px;left:-1000px;';
+                document.body.appendChild(area);
+                area.select();
+                const ok = document.execCommand('copy');
+                area.remove();
+                if (ok) { done(); return; }
+            } catch (e) {}
+            cbWhToast('Kopieren hat nicht geklappt', false);
+        };
+
+        const copySummary = () => {
+            const ref = refDate();
+            const week = calcWeek(ref);
+            const month = calcMonth(ref);
+            const pad = (text, width) => { let out = String(text); while (out.length < width) out += ' '; return out; };
+            const row = (label, value) => pad(label, 16) + value;
+            const lines = ['Arbeitsstunden ' + week.label];
+            lines.push(row('Soll', cbWhFmt(week.targetMin)));
+            lines.push(row('Ist', cbWhFmt(week.doneMin)));
+            lines.push(row(week.restMin <= 0 ? 'Über dem Soll' : 'Noch offen', cbWhFmt(Math.abs(week.restMin))));
+            if (week.manualMin) lines.push(row('davon manuell', (week.manualMin >= 0 ? '+' : '') + cbWhFmt(week.manualMin)));
+            lines.push('');
+            lines.push(month.month.label + ': Ist ' + cbWhFmt(month.doneMin) + ' / Soll ' + cbWhFmt(month.targetMin)
+                + ' (' + (month.restMin <= 0 ? '+' + cbWhFmt(-month.restMin) + ' über dem Soll' : cbWhFmt(month.restMin) + ' offen') + ')');
+            lines.push('');
+            week.days.forEach(day => {
+                lines.push(pad(day.label + ' ' + day.dayNum + '.' + cbWhPad(day.date.getMonth() + 1) + '.', 12)
+                    + pad(day.trackedMin === null && day.creditMin === 0 ? '–' : cbWhFmt(day.totalMin), 8)
+                    + (day.chips.length ? day.chips.join(', ') : '')
+                    + (day.overLong ? ' (über 10 Std.!)' : ''));
+            });
+            if (week.manual.length) {
+                lines.push('');
+                lines.push('Manuelle Korrekturen:');
+                week.manual.forEach(entry => {
+                    const hours = Number(entry.item.h) || 0;
+                    lines.push('  ' + pad((hours >= 0 ? '+' : '') + cbWhFmt(hours * 60), 8)
+                        + (entry.carry ? carryLabel(String(entry.item.from || '')) : (entry.item.note || 'Korrektur')));
+                });
+            }
+            const text = lines.join(NL);
+            const done = () => cbWhToast('Zusammenfassung kopiert');
+            try {
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(text).then(done, () => fallbackCopy(text, done));
+                    return;
+                }
+            } catch (e) {}
+            fallbackCopy(text, done);
+        };
 
         // ── Eingabe "1,5" / "0:30" / "-2" in Stunden umwandeln ──
         const parseHours = (text) => {
@@ -5258,13 +6255,13 @@
         const addManual = (hours) => {
             const panel = document.getElementById(PANEL_ID);
             const noteInput = panel ? panel.querySelector('.cb_wh_note') : null;
-            const week = cbWhWeekInfo(new Date());
+            const week = cbWhWeekInfo(refDate()); // die gerade angezeigte Woche
             const store = lsGet(MANUAL_KEY, {});
             const list = store[week.key] || [];
             list.push({ h: Math.round(hours * 100) / 100, note: noteInput ? noteInput.value.trim() : '', ts: Date.now() });
             store[week.key] = list;
             const keys = Object.keys(store).sort();
-            while (keys.length > 12) { delete store[keys.shift()]; } // nur die letzten 12 Wochen behalten
+            while (keys.length > 90) { delete store[keys.shift()]; } // deckt den ganzen blaetterbaren Zeitraum ab
             lsSet(MANUAL_KEY, store);
             render();
         };
@@ -5278,17 +6275,19 @@
             menu.className = 'cb_wh_menu';
             menu.innerHTML = '<b>' + iso.split('-').reverse().join('.') + '</b>'
                 + DAY_TYPES.map(type => '<a data-type="' + type.id + '" class="' + (type.id === current ? 'cb_wh_act' : '') + '">'
-                    + '<i style="background:' + (type.color || 'transparent') + '"></i>' + esc(type.label) + '</a>').join('');
+                    + '<i style="background:' + (type.color || 'transparent') + '"></i>' + esc(type.label) + '</a>').join('')
+                + planRowHtml(planOf(iso), 1);
             document.body.appendChild(menu);
+            bindPlanRow(menu, [iso], () => { menu.remove(); clearPick(); render(); });
             const box = cell.getBoundingClientRect();
             menu.style.top = (window.scrollY + box.bottom + 4) + 'px';
             menu.style.left = Math.max(6, Math.min(window.scrollX + box.left,
                 window.scrollX + document.documentElement.clientWidth - menu.offsetWidth - 10)) + 'px';
-            menu.querySelectorAll('a').forEach(link => link.addEventListener('click', () => {
+            menu.querySelectorAll('a[data-type]').forEach(link => link.addEventListener('click', () => {
                 const type = link.getAttribute('data-type');
                 const store = lsGet(TYPE_KEY, {});
                 if (type === 'auto') delete store[iso]; else store[iso] = type;
-                const limit = cbWhIso(cbWhAddDays(new Date(), -200));
+                const limit = cbWhIso(navLimits().start);
                 Object.keys(store).forEach(key => { if (key < limit) delete store[key]; });
                 lsSet(TYPE_KEY, store);
                 menu.remove();
@@ -5302,10 +6301,107 @@
             }, 0);
         };
 
+        // ── Mehrere Tage (per Drag ausgewählt): Zusammenfassung + Tages-Typ für alle ──
+        const openRangeMenu = (isos) => {
+            document.querySelectorAll('.cb_wh_menu').forEach(old => old.remove()); // Markierung bleibt stehen
+            const panel = document.getElementById(PANEL_ID);
+            if (!panel || !isos.length) return;
+
+            const c = cfg(), st = stores();
+            const sollPerDay = Math.round(c.weekHours / 5 * 60); // Tages-Soll = Wochen-Soll / 5
+            const days = isos.map(iso => calcDay(cbWhFromIso(iso), c, st));
+            const sum = (pick) => days.reduce((total, day) => total + (pick(day) || 0), 0);
+            const trackedMin = sum(day => day.trackedMin);
+            const creditMin = sum(day => day.creditMin);
+            const totalMin = sum(day => day.totalMin);
+            const workdays = days.filter(day => !day.isWeekend).length;
+            const targetMin = workdays * sollPerDay;
+            const diffMin = totalMin - targetMin;
+            const missing = days.filter(day => !day.isWeekend && !day.isFuture && day.trackedMin === null && day.creditMin === 0)
+                .map(day => day.dayNum + '.' + cbWhPad(day.date.getMonth() + 1) + '.');
+            const kinds = {};
+            days.forEach(day => { kinds[day.override || 'auto'] = true; });
+            const plans = {};
+            days.forEach(day => { plans[day.planMin || 0] = true; }); // gemeinsame feste Arbeitszeit?
+            const commonPlan = Object.keys(plans).length === 1 ? (days[0].planMin || 0) : 0;
+            const common = Object.keys(kinds).length === 1 ? Object.keys(kinds)[0] : ''; // nur markieren, wenn alle gleich
+            const dayList = isos.map(iso => iso.slice(8) + '.' + iso.slice(5, 7) + '.');
+            // lückenlos ausgewählt? dann Zeitraum zeigen, sonst die Tage einzeln
+            const gapless = isos.length === Math.round((cbWhFromIso(isos[isos.length - 1]) - cbWhFromIso(isos[0])) / 86400000) + 1;
+            const span = gapless
+                ? (isos.length === 1 ? dayList[0] : dayList[0] + ' – ' + dayList[dayList.length - 1])
+                : dayList.slice(0, 4).join(', ') + (dayList.length > 4 ? ' …' : '');
+            const dayWord = isos.length === 1 ? ' Tag' : ' Tage';
+            const tooLong = days.filter(day => day.overLong).length;
+            const row = (label, value, top) => '<div' + (top ? ' class="cb_wh_sumtop"' : '') + '>'
+                + '<span>' + esc(label) + '</span><b>' + esc(value) + '</b></div>';
+
+            const menu = document.createElement('div');
+            menu.className = 'cb_wh_menu cb_wh_range';
+            menu.innerHTML = '<b>' + isos.length + dayWord + ' · ' + esc(span) + '</b>'
+                + '<div class="cb_wh_sum">'
+                +     row('Gestempelt', cbWhFmt(trackedMin))
+                +     row('Angerechnet', cbWhFmt(creditMin))
+                +     row('Gezählt (Ist)', cbWhFmt(totalMin), true)
+                +     row('Soll (' + workdays + ' Arbeitstage)', cbWhFmt(targetMin))
+                +     row(diffMin >= 0 ? 'Über dem Soll' : 'Unter dem Soll', (diffMin >= 0 ? '+' : '') + cbWhFmt(diffMin))
+                +     row('Ø pro Arbeitstag', workdays ? cbWhFmt(totalMin / workdays) : '–')
+                +     (tooLong ? row('über 10 Std.', tooLong + (tooLong === 1 ? ' Tag' : ' Tage')) : '')
+                + '</div>'
+                + (missing.length ? '<div class="cb_wh_sumnote">Ohne Erfassung: ' + esc(missing.join(', ')) + ' – als 0:00 gerechnet</div>' : '')
+                + '<b>' + (isos.length === 1 ? 'Diesen Tag setzen' : 'Alle ' + isos.length + ' Tage setzen') + '</b>'
+                + DAY_TYPES.map(type => '<a data-type="' + type.id + '" class="' + (type.id === common ? 'cb_wh_act' : '') + '">'
+                    + '<i style="background:' + (type.color || 'transparent') + '"></i>' + esc(type.label) + '</a>').join('')
+                + planRowHtml(commonPlan, isos.length);
+            document.body.appendChild(menu);
+            // Sicherheitsnetz: solange das Popup offen ist, sind die Tage auf jeden Fall markiert
+            isos.forEach(iso => {
+                const cell = panel.querySelector('.cb_wh_day[data-iso="' + iso + '"]');
+                if (cell) cell.classList.add('cb_wh_pick');
+            });
+            bindPlanRow(menu, isos, () => { menu.remove(); clearPick(); render(); });
+
+            const anchor = panel.querySelector('.cb_wh_day[data-iso="' + isos[0] + '"]') || panel.querySelector('.cb_wh_cal');
+            const box = anchor.getBoundingClientRect();
+            menu.style.top = (window.scrollY + box.bottom + 4) + 'px';
+            menu.style.left = Math.max(6, Math.min(window.scrollX + box.left,
+                window.scrollX + document.documentElement.clientWidth - menu.offsetWidth - 10)) + 'px';
+
+            menu.querySelectorAll('a[data-type]').forEach(link => link.addEventListener('click', () => {
+                const type = link.getAttribute('data-type');
+                const store = lsGet(TYPE_KEY, {});
+                isos.forEach(iso => { if (type === 'auto') delete store[iso]; else store[iso] = type; });
+                const limit = cbWhIso(navLimits().start);
+                Object.keys(store).forEach(key => { if (key < limit) delete store[key]; });
+                lsSet(TYPE_KEY, store);
+                menu.remove();
+                clearPick();
+                render();
+            }));
+
+            // beim naechsten Druck daneben wieder zu – auf mousedown, damit der eigene
+            // Klick des Drags nicht zaehlt und kein setTimeout-Wettlauf entsteht
+            const close = (event) => {
+                if (!menu.isConnected) { document.removeEventListener('mousedown', close); return; }
+                if (menu.contains(event.target)) return;
+                menu.remove();
+                clearPick();
+                document.removeEventListener('mousedown', close);
+            };
+            document.addEventListener('mousedown', close);
+        };
+
         // ── Einstellungs-Popup (Zahnrad neben dem Sync-Icon) ──
-        const cfgGroup = (key, options, current) => options.map(option =>
-            '<a data-cfg="' + key + '" data-value="' + option.id + '" class="' + (option.id === current ? 'cb_wh_act' : '') + '">'
-            + '<i></i>' + esc(option.label) + '</a>').join('');
+        // kompakte Schalter-Gruppe (mehrere Knoepfe nebeneinander statt untereinander)
+        const cfgGroup = (key, options, current, off) => '<span class="cb_wh_pills' + (off ? ' cb_wh_pillsoff' : '') + '">'
+            + options.map(option => '<a data-cfg="' + key + '" data-value="' + option.id + '"'
+                + ' class="' + (option.id === current ? 'cb_wh_act' : '') + '"'
+                + ' title="' + esc(option.label) + '">' + esc(option.short || option.label) + '</a>').join('')
+            + '</span>';
+
+        // eine Zeile im Einstellungs-Popup: Beschriftung links, Bedienelement rechts
+        const cfgLine = (label, content, title, off) => '<div class="cb_wh_cfgline' + (off ? ' cb_wh_lineoff' : '') + '"'
+            + (title ? ' title="' + esc(title) + '"' : '') + '><label>' + esc(label) + '</label>' + content + '</div>';
 
         const openCfgMenu = (anchor) => {
             const open = !!document.querySelector('.cb_wh_cfgbox');
@@ -5315,32 +6411,77 @@
             const c = cfg();
             const box = document.createElement('div');
             box.className = 'cb_wh_menu cb_wh_cfgbox';
-            box.innerHTML = '<b class="cb_wh_first">Kalender-Ansicht</b>'
-                + cfgGroup('week_view', VIEW_OPTIONS, viewMode())
-                + '<b>Soll- / Offene Stunden</b>'
-                + cfgGroup('week_hours_scope', SCOPE_OPTIONS, scopeMode())
-                + '<b>Soll-Stunden</b>'
-                + '<div class="cb_wh_cfgrow"><label>Woche</label>'
-                +     '<input type="text" class="form-control cb_wh_cfg_week" value="' + esc(cbWhFmtDec(c.weekHours)) + '"><em>Std.</em></div>'
-                + '<div class="cb_wh_cfgrow"><label>Abwesenheitstag</label>'
-                +     '<input type="text" class="form-control cb_wh_cfg_day" value="' + esc(cbWhFmtDec(c.dayHours)) + '"><em>Std.</em></div>'
-                + '<div class="cb_wh_cfgnote">Monats-Soll = Arbeitstage des Monats (Mo–Fr) × Wochen-Soll / 5.</div>';
+            const numField = (cls, value) => '<input type="text" class="form-control ' + cls + '" value="' + esc(value) + '">';
+            const monthView = viewMode() === 'month'; // die Einklapp-Option gilt nur dort
+            box.innerHTML = '<div class="cb_wh_cfgsec cb_wh_first">Anzeige</div>'
+                + cfgLine('Kalender', cfgGroup('week_view', VIEW_OPTIONS, viewMode()))
+                + cfgLine('Stunden', cfgGroup('week_hours_scope', SCOPE_OPTIONS, scopeMode()))
+                + cfgLine('eingeklappt', cfgGroup('cal_collapsed', CAL_START_OPTIONS, settings.cal_collapsed === 'closed' ? 'closed' : 'open')
+                    + cfgGroup('cal_remember', CAL_MEMORY_OPTIONS, calRemember() ? 'on' : 'off'),
+                    'Startzustand des Mini-Kalenders und ob ein Umklappen gemerkt wird')
+                + cfgLine('eingeklappt zeigt', cfgGroup('cal_collapsed_mode', CAL_FOLD_OPTIONS,
+                        calFoldWeek() ? 'week' : 'none', !monthView),
+                    monthView ? 'In der Monats-Ansicht: eingeklappt nur die aktuelle Woche, ausgeklappt der ganze Monat'
+                        : 'Nur in der Monats-Übersicht einstellbar',
+                    !monthView)
+                + '<div class="cb_wh_cfgsec">Soll-Stunden</div>'
+                + cfgLine('Woche', numField('cb_wh_cfg_week', cbWhFmtDec(c.weekHours)) + '<em>Std.</em>')
+                + cfgLine('Abwesenheitstag', numField('cb_wh_cfg_day', cbWhFmtDec(c.dayHours)) + '<em>Std.</em>')
+                + '<div class="cb_wh_cfgsec">Feierabend</div>'
+                + cfgLine('Uhrzeit ab unter', numField('cb_wh_cfg_until', cbWhFmtDec(c.untilHours)) + '<em>Std. offen</em>',
+                    'Die Uhrzeit erscheint klein über den offenen Stunden, sobald weniger als dieser Wert offen ist')
+                + '<div class="cb_wh_cfgsec">Tastatur</div>'
+                + cfgLine('blättern', keyCapHtml('nav_prev') + keyCapHtml('nav_next'))
+                + cfgLine('heute · Ansicht', keyCapHtml('nav_today') + keyCapHtml('view_toggle'))
+                + cfgLine('Kalender auf/zu', keyCapHtml('cal_toggle'))
+                + '<div class="cb_wh_cfgnote">Taste ändern: klicken, dann drücken · Esc bricht ab, Rücktaste löscht</div>';
             document.body.appendChild(box);
             anchor.classList.add('cb_wh_open');
 
-            const place = () => { // rechtsbuendig unter dem Zahnrad
+            // Rechtsbuendig unter dem Zahnrad. Die linke Kante wird nur EINMAL bestimmt und
+            // danach festgehalten – sonst wandert das Popup, wenn sich seine Breite durch
+            // eine Umschaltung minimal aendert.
+            let fixedLeft = null;
+            const place = () => {
                 const rect = anchor.getBoundingClientRect();
                 box.style.top = (window.scrollY + rect.bottom + 6) + 'px';
-                box.style.left = Math.max(6, Math.min(window.scrollX + rect.right - box.offsetWidth,
-                    window.scrollX + document.documentElement.clientWidth - box.offsetWidth - 10)) + 'px';
+                if (fixedLeft === null) {
+                    fixedLeft = Math.max(6, Math.min(window.scrollX + rect.right - box.offsetWidth,
+                        window.scrollX + document.documentElement.clientWidth - box.offsetWidth - 10));
+                }
+                box.style.left = fixedLeft + 'px';
             };
             place();
 
+            box.querySelectorAll('a[data-key]').forEach(link => link.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                const id = link.getAttribute('data-key');
+                keyCapture = (keyCapture === id) ? null : id; // zweiter Klick bricht ab
+                repaintKeyCaps();
+            }));
+
             box.querySelectorAll('a[data-cfg]').forEach(link => link.addEventListener('click', () => {
+                if (link.closest('.cb_wh_lineoff')) return; // ausgegraute Zeile ist gesperrt
                 const key = link.getAttribute('data-cfg');
                 const patch = {};
                 patch[key] = link.getAttribute('data-value');
                 saveSettings(patch);
+                if (key === 'cal_collapsed') resetCalOpen(true); // gemerkten Zustand verwerfen
+                if (key === 'cal_remember') resetCalOpen(false);
+                if (key === 'week_view') { // Sperre der Einklapp-Option nachziehen
+                    const monthNow = viewMode() === 'month';
+                    const pill = box.querySelector('a[data-cfg="cal_collapsed_mode"]');
+                    const row = pill ? pill.closest('.cb_wh_cfgline') : null;
+                    if (row) {
+                        row.classList.toggle('cb_wh_lineoff', !monthNow);
+                        row.setAttribute('title', monthNow
+                            ? 'In der Monats-Ansicht: eingeklappt nur die aktuelle Woche, ausgeklappt der ganze Monat'
+                            : 'Nur in der Monats-Übersicht einstellbar');
+                        const pills = row.querySelector('.cb_wh_pills');
+                        if (pills) pills.classList.toggle('cb_wh_pillsoff', !monthNow);
+                    }
+                }
                 box.querySelectorAll('a[data-cfg="' + key + '"]').forEach(other => {
                     if (other === link) other.classList.add('cb_wh_act'); else other.classList.remove('cb_wh_act');
                 });
@@ -5360,9 +6501,11 @@
             };
             const weekInput = box.querySelector('.cb_wh_cfg_week');
             const dayInput = box.querySelector('.cb_wh_cfg_day');
+            const untilInput = box.querySelector('.cb_wh_cfg_until');
             weekInput.addEventListener('change', () => applyNumber(weekInput, 'week_hours', cfg().weekHours));
             dayInput.addEventListener('change', () => applyNumber(dayInput, 'absence_day_hours', cfg().dayHours));
-            [weekInput, dayInput].forEach(input => input.addEventListener('keydown', event => {
+            untilInput.addEventListener('change', () => applyNumber(untilInput, 'week_until_hours', cfg().untilHours));
+            [weekInput, dayInput, untilInput].forEach(input => input.addEventListener('keydown', event => {
                 if (event.key === 'Enter') { event.preventDefault(); input.blur(); }
             }));
 
@@ -5408,8 +6551,78 @@
 
         // ── Events an das gerenderte Panel hängen ──
         const bindEvents = (panel) => {
-            panel.querySelectorAll('.cb_wh_day').forEach(cell => {
-                cell.addEventListener('click', event => { event.preventDefault(); openDayMenu(cell); });
+            dayCells(panel).forEach(cell => {
+                cell.addEventListener('click', event => {
+                    event.preventDefault();
+                    if (dragSkipClick) return; // gerade wurde eine Mehrfach-Auswahl abgeschlossen
+                    openDayMenu(cell);
+                });
+                cell.addEventListener('mousedown', event => { // Start einer moeglichen Drag-Auswahl
+                    if (event.button !== 0) return;
+                    event.preventDefault(); // verhindert das Markieren von Text beim Ziehen
+                    dragAdd = event.ctrlKey || event.metaKey; // Strg/Cmd -> Auswahl erweitern
+                    if (dragAdd) document.querySelectorAll('.cb_wh_menu').forEach(old => old.remove()); // Auswahl behalten
+                    else closeMenus();
+                    dragging = true;
+                    dragMoved = false;
+                    dragFrom = cell.getAttribute('data-iso');
+                    dragTo = dragFrom;
+                    const cal = cell.parentNode;
+                    if (cal && cal.classList && cal.classList.contains('cb_wh_cal')) cal.classList.add('cb_wh_drag');
+                    paintPick();
+                });
+                cell.addEventListener('mouseenter', () => { // Auswahl mitziehen
+                    if (!dragging) return;
+                    const iso = cell.getAttribute('data-iso');
+                    if (!iso || iso === dragTo) return;
+                    dragTo = iso;
+                    dragMoved = true;
+                    paintPick();
+                });
+            });
+            if (!dragBound) { // nur einmal pro Seitenaufruf
+                dragBound = true;
+                document.addEventListener('mouseup', () => {
+                    if (!dragging) return;
+                    dragging = false;
+                    const isos = pickedIsos(); // Tage im gerade gezogenen Bereich
+                    const openMenu = () => {
+                        dragSkipClick = true;
+                        setTimeout(() => { dragSkipClick = false; }, 0);
+                        paintPick();
+                        openRangeMenu(pickSet.slice());
+                    };
+                    if (dragAdd) { // Strg: einzelnen Tag umschalten bzw. Bereich dazunehmen
+                        if (dragMoved) isos.forEach(iso => { if (pickSet.indexOf(iso) < 0) pickSet.push(iso); });
+                        else togglePick(dragFrom);
+                        pickSet.sort();
+                        dragFrom = null;
+                        dragTo = null;
+                        dragSkipClick = true; // auch beim Abwaehlen kein Tages-Menü
+                        setTimeout(() => { dragSkipClick = false; }, 0);
+                        if (pickSet.length) openMenu(); else clearPick();
+                    } else if (dragMoved && isos.length > 1) {
+                        pickSet = isos.slice();
+                        dragFrom = null;
+                        dragTo = null;
+                        openMenu();
+                    } else {
+                        clearPick(); // Einzelklick -> das normale Tages-Menü uebernimmt
+                    }
+                    dragMoved = false;
+                    dragAdd = false;
+                });
+            }
+            const navLink = (selector, action) => { // Blättern: deaktivierte Pfeile bleiben stumm
+                const link = panel.querySelector(selector);
+                if (!link || link.classList.contains('cb_wh_off')) return;
+                link.addEventListener('click', event => { event.preventDefault(); closeMenus(); action(); render(); });
+            };
+            navLink('.cb_wh_prev', () => { navSlide = -1; shiftNav(-1); });
+            navLink('.cb_wh_next', () => { navSlide = 1; shiftNav(1); });
+            navLink('.cb_wh_now', () => { // Richtung danach, wo wir herkommen
+                navSlide = (navDate && navDate < new Date()) ? 1 : -1;
+                navDate = null;
             });
             const hoursInput = panel.querySelector('.cb_wh_h');
             const submit = (sign) => {
@@ -5423,16 +6636,91 @@
                 input.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); submit(1); } });
             });
             panel.querySelectorAll('.cb_wh_del').forEach(link => link.addEventListener('click', () => {
-                const week = cbWhWeekInfo(new Date());
+                const index = parseInt(link.getAttribute('data-index'), 10);
+                if (link.getAttribute('data-carry') === '1') { // Übertrag aus einer alten Woche loeschen
+                    const state = carryLoad();
+                    state.items.splice(index, 1);
+                    carrySave(state);
+                    render();
+                    return;
+                }
+                const key = link.getAttribute('data-week');
                 const store = lsGet(MANUAL_KEY, {});
-                const list = store[week.key] || [];
-                list.splice(parseInt(link.getAttribute('data-index'), 10), 1);
-                store[week.key] = list;
+                const list = store[key] || [];
+                list.splice(index, 1);
+                if (list.length) store[key] = list; else delete store[key];
                 lsSet(MANUAL_KEY, store);
                 render();
             }));
         };
 
+
+        // ── Tastendruck ausführen ──
+        const runKeyAction = (id) => {
+            if (id === 'nav_prev' || id === 'nav_next') {
+                const step = id === 'nav_prev' ? -1 : 1;
+                if (!canShift(step)) return;
+                closeMenus();
+                navSlide = step;
+                shiftNav(step);
+                render();
+                return;
+            }
+            if (id === 'nav_today') {
+                if (isCurrentPeriod()) return;
+                closeMenus();
+                navSlide = (navDate && navDate < new Date()) ? 1 : -1;
+                navDate = null;
+                render();
+                return;
+            }
+            if (id === 'view_toggle') {
+                closeMenus();
+                saveSettings({ week_view: viewMode() === 'month' ? 'week' : 'month' });
+                render();
+                return;
+            }
+            if (id === 'cal_toggle') {
+                closeMenus();
+                toggleCal();
+                render();
+            }
+        };
+
+        const onPanelKey = (event) => {
+            if (!document.getElementById(PANEL_ID)) return;
+
+            if (keyCapture) { // gerade wird eine neue Taste gesucht
+                event.preventDefault();
+                event.stopPropagation();
+                const action = keyCapture;
+                keyCapture = null;
+                if (event.key !== 'Escape') {
+                    const map = keyMap();
+                    const value = (event.key === 'Backspace' || event.key === 'Delete') ? '' : event.key;
+                    if (value) { // dieselbe Taste nicht zweimal belegen
+                        Object.keys(map).forEach(id => { if (id !== action && sameKey(map[id], value)) map[id] = ''; });
+                    }
+                    map[action] = value;
+                    saveSettings({ keys: map });
+                }
+                repaintKeyCaps();
+                return;
+            }
+
+            const target = event.target;
+            const tag = target && target.tagName ? target.tagName.toLowerCase() : '';
+            if (tag === 'input' || tag === 'textarea' || tag === 'select') return; // Eingaben haben Vorrang
+            if (target && target.isContentEditable) return;
+            if (event.ctrlKey || event.metaKey || event.altKey) return;
+
+            const map = keyMap();
+            const hit = Object.keys(map).filter(id => sameKey(map[id], event.key))[0];
+            if (!hit) return;
+            event.preventDefault();
+            runKeyAction(hit);
+        };
+        document.addEventListener('keydown', onPanelKey);
 
         // ── Panel in die Filter-Spalte hängen ──
         const buildPanel = () => {
@@ -5450,12 +6738,14 @@
             panel.innerHTML = '<div class="panel-heading"><h3 class="panel-title">Arbeitsstunden'
                 + '<small class="cb_wh_kw"></small>'
                 + '<span class="cb_wh_actions">'
+                +     '<a class="cb_wh_copy glyphicon glyphicon-duplicate" title="Zusammenfassung in die Zwischenablage kopieren"></a>'
                 +     '<a class="cb_wh_sync glyphicon glyphicon-refresh" title="Abwesenheiten aus absence.io holen"></a>'
                 +     '<a class="cb_wh_cfg glyphicon glyphicon-cog" title="Anzeige-Einstellungen"></a>'
                 + '</span>'
                 + '</h3></div><div class="panel-body"></div>';
             const target = column || fallback;
             target.insertBefore(panel, target.firstChild);
+            panel.querySelector('.cb_wh_copy').addEventListener('click', (event) => { event.preventDefault(); copySummary(); });
             panel.querySelector('.cb_wh_sync').addEventListener('click', () => startSync());
             panel.querySelector('.cb_wh_cfg').addEventListener('click', (event) => {
                 event.preventDefault();
@@ -5480,7 +6770,17 @@
             const panel = document.getElementById(PANEL_ID);
             // Soft-Reload (z.B. dailyResultModal auf/zu) ersetzt die Spalte und wirft das Panel raus
             if (!panel || !panel.isConnected) { schedule(50); return; }
-            const outside = mutations.some(entry => !(panel === entry.target || panel.contains(entry.target)));
+            // eigene Popups und Toasts haengen an document.body – die sind keine fremde
+            // Aenderung und duerfen kein Neu-Rendern ausloesen (sonst ist die Auswahl weg)
+            const ours = (node) => !!(node && node.nodeType === 1 && node.classList
+                && (node.classList.contains('cb_wh_menu') || node.classList.contains('cb_wh_toast')));
+            const outside = mutations.some(entry => {
+                if (panel === entry.target || panel.contains(entry.target)) return false;
+                const nodes = Array.prototype.slice.call(entry.addedNodes)
+                    .concat(Array.prototype.slice.call(entry.removedNodes));
+                if (nodes.length && nodes.every(ours)) return false;
+                return true;
+            });
             if (!outside) return; // eigene Renderings ignorieren
             schedule(250);
         });
@@ -5488,6 +6788,7 @@
 
         // Sicherheitsnetz: falls nach einem Soft-Reload keine Mutationen mehr folgen
         setInterval(() => { if (!document.getElementById(PANEL_ID)) refresh(); }, 1500);
+        setInterval(paintUntil, 20000); // "bis HH:MM" mitlaufen lassen, ohne das Panel neu zu bauen
 
         setTimeout(refresh, 1200); // die settings kommen erst kurz nach dem Start aus dem localStorage
         setTimeout(refresh, 3000);

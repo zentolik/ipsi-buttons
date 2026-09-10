@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Copy-Buttons
 // @namespace    https://github.com/zentolik
-// @version      1.04
+// @version      1.05
 // @description  doing stuff ʕ·͡ᴥ·ʔ
 // @author       Zentolik
 // @match        https://ipsi.securewebsystems.net/project/detailed/*
@@ -18,7 +18,7 @@
 
 !(function() { // ʕ·͡ᴥ·ʔ hi & ty <3
     'use strict';
-    const SCRIPT_VERSION = '1.04';
+    const SCRIPT_VERSION = '1.05';
     console.log(`ʕ·͡ᴥ·ʔ *bup* v${SCRIPT_VERSION}`);
     let settings = {
         button_position: true, // ändert die position vom btn (wenn auf "false", empfähle ich "copy_icon" zu aktivieren") //
@@ -63,6 +63,15 @@
         cal_remember: 'off', // ein-/ausgeklappten Zustand des Mini-Kalenders merken: 'on' / 'off' //
         cal_collapsed_mode: 'week', // was der eingeklappte Mini-Kalender in der Monats-Ansicht zeigt: 'week' (nur die aktuelle Woche) / 'none' (nichts) //
         keys: { nav_prev: 'ArrowLeft', nav_next: 'ArrowRight', nav_today: 't', view_toggle: 'm', cal_toggle: 'Enter' }, // Tastatur-Steuerung des Wochenstunden-Panels – anpassbar über das Zahnrad im Panel //
+        phone_prefix_show: true, // zeigt neben Firma und Brand klein "(Vorwahl: X)" aus der Amtsholungs-Liste //
+        phone_prefixes: {}, // eigene Amtsholungen, z.B. { 'net365': '16' } – überschreibt die Liste im Script (Klick auf "(Vorwahl: …)") //
+        phone_links: true, // Telefon-/Handy-Nummern in den Vertragsdaten als 3CX-Anruflink + Copy-Icon //
+        phone_scheme: 'tel', // Protokoll des Anruflinks: 'tel' / 'callto' / 'sip' – 3CX registriert diese unter Windows //
+        phone_intl_prefix: '00', // so werden "+49…"-Nummern gewählt ('00' -> 0049…, leer -> +49… bleibt stehen) //
+        phone_note: true, // nach dem Anruf die Leiste "Telefonat läuft" einblenden und danach eine Telefon-Notiz anbieten //
+        phone_note_scan: true, // alle Seiten der Kundenkommunikation nach eigenen Telefon-Notizen durchsuchen (läuft während des Telefonats) //
+        phone_note_panel_auto: true, // Notizzettel (Kundendaten + Notizfeld) beim Anruf automatisch aufklappen //
+        phone_note_line: '{datum}, {zeit} Uhr – {nummer} | {doku}', // Zeile der Telefon-Notiz; Platzhalter: {datum} {zeit} {nummer} {waehlnummer} {dauer} {label} {doku} //
     };
 
     const saveSettings = (newSettings) => { // Settings speichern – auch außerhalb des Settings-Popups nutzbar //
@@ -6805,6 +6814,882 @@
                 if (cbWhHasGm() && (!cached || (Date.now() - (cached.ts || 0)) > 12 * 3600000)) startSync();
             }, 2500);
         }
+    })();
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // ─── Telefon: Amtsholung, 3CX-Anruf & Telefon-Notiz ──────────────────────
+    // 1. Firma und Brand bekommen klein "(Vorwahl: X)" aus der Amtsholungs-Liste
+    //    angehängt. Ein Klick auf die Anzeige setzt einen eigenen Wert (falls
+    //    eine Firmierung mal anders in IPSI steht als in der Liste).
+    // 2. "Telefon:" und "Handy:" in den Vertragsdaten werden zu Anruflinks:
+    //    ein tel:-Link, für den die 3CX-App unter Windows registriert ist.
+    //    Gewählt wird Amtsholung der Brand + Nummer ohne Schrägstriche,
+    //    Leerzeichen und Klammern. Daneben sitzt ein Copy-Icon wie bei den
+    //    Website-Materialien (Shift+Klick kopiert die Wählnummer inkl. Amt).
+    // 3. Nach dem Klick läuft unten links eine Leiste mit Startzeit und Dauer
+    //    und darüber klappt der Notizzettel auf: Brand, Kundenfirma, Ansprech-
+    //    partner, Ort, E-Mail, Nummer – plus ein Feld für Notizen während des
+    //    Gesprächs. Der Zettel schwebt (kein Modal), ist verschiebbar und
+    //    blockiert IPSI nicht.
+    // 4. "Beenden & notieren" in der Leiste legt in der Kundenkommunikation
+    //    eine Telefon-Notiz an bzw. hängt den Eintrag
+    //    unter den letzten Eintrag einer bestehenden eigenen Telefon-Notiz:
+    //    Datum, Uhrzeit, Nummer und dahinter die Doku aus dem Zettel. Bei
+    //    mehreren eigenen Telefon-Notizen kommt vorher eine Übersicht.
+    (() => {
+        if (!/^\/(project|contract)\/detailed\//.test(location.pathname)) return;
+
+        // ── Amtsholungs-Liste ──────────────────────────────────────────────
+        // Werte laut Amtsholungs-Übersicht. Eigene Ergänzungen/Korrekturen
+        // landen in settings.phone_prefixes und haben immer Vorrang.
+        const PREFIX_LIST = {
+            'wwwe GmbH': '0',
+            'Euroweb': '1',
+            'United Media AG': '2',
+            'Internet Online Media GmbH': '3',
+            'WN Online-Service GmbH & Co. KG': '4',
+            'Westfalen-Blatt OnlineService': '5',
+            'STZ Online-Service GmbH': '6',
+            'um united media Switzerland AG': '7',
+            'reeach by Onlane GmbH': '8',
+            'Pkw.de Digital Mobility Solutions GmbH': '9',
+            'Maxworker Verwaltungs GmbH': '11',
+            'vertical IT-Service GmbH': '12',
+            'net365': '16',
+        };
+
+        const PREFIX_CLASS = 'cb_vorwahl';
+        const LINK_CLASS = 'cb_tel_link';
+        const COPY_CLASS = 'cb_tel_copy';
+        const BAR_ID = 'cb_call_bar';
+        const PANEL_ID = 'cb_call_panel';
+        const PICKER_ID = 'cb_phone_picker';
+        const CALL_STORE = 'cb_phone_call_' + (typeof storage_key === 'string' ? storage_key : location.pathname);
+
+        // Rechtsformen fliegen beim Vergleich raus, Ortsangaben bleiben drin –
+        // sonst wäre "United Media AG" nicht von der Schweizer Brand zu trennen.
+        const LEGAL_FORMS = ['gmbh', 'ag', 'mbh', 'kg', 'kgaa', 'co', 'ohg', 'ug', 'gbr', 'ev', 'se', 'ltd', 'inc', 'llc', 'sa', 'srl', 'bv', 'nv'];
+
+        const nameTokens = (value) => String(value || '')
+            .toLowerCase()
+            .replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss')
+            .replace(/[^a-z0-9]+/g, ' ')
+            .trim()
+            .split(/\s+/)
+            .filter(token => token && LEGAL_FORMS.indexOf(token) === -1);
+
+        const prefixTable = () => Object.assign({}, PREFIX_LIST, settings.phone_prefixes || {});
+
+        // Beste Übereinstimmung: alle Wörter des Listen-Eintrags müssen im
+        // IPSI-Namen stecken. "United Media AG Deutschland" trifft damit
+        // "United Media AG", nicht die Schweizer Brand. Der längste Treffer
+        // gewinnt, damit "um united media Switzerland AG" Vorrang hat.
+        const lookupPrefix = (name) => {
+            const words = nameTokens(name);
+            if (!words.length) return null;
+            let best = null;
+            Object.keys(prefixTable()).forEach(key => {
+                const value = prefixTable()[key];
+                if (value === '' || value === null || value === undefined) return;
+                const keyWords = nameTokens(key);
+                if (!keyWords.length) return;
+                if (!keyWords.every(word => words.indexOf(word) !== -1)) return;
+                if (!best || keyWords.length > best.score) best = { key: key, value: String(value).trim(), score: keyWords.length };
+            });
+            return best;
+        };
+
+        // ── Panels, in denen Firma/Brand/Telefon/Handy stehen ──────────────
+        // Projekt-Seite: Firma/Brand im Info-Panel, Telefon/Handy im separaten
+        // Vertragsdaten-Panel. Vertrags-Seite: alles im Info-Panel.
+        const scopes = () => {
+            const list = [];
+            const info = document.getElementById(INFO_PANEL_ID);
+            if (info) list.push(info);
+            document.querySelectorAll('.panel .panel-title').forEach(title => {
+                if ((title.textContent || '').trim().toLowerCase().indexOf('vertragsdaten') !== 0) return;
+                const panel = title.closest('.panel');
+                if (panel && list.indexOf(panel) === -1) list.push(panel);
+            });
+            return list;
+        };
+
+        const labelRows = (names) => {
+            const rows = [];
+            scopes().forEach(scope => {
+                scope.querySelectorAll('p > b').forEach(bold => {
+                    const label = (bold.textContent || '').replace(/\s+/g, ' ').trim().replace(/:\s*$/, '').toLowerCase();
+                    if (names.indexOf(label) === -1) return;
+                    if (rows.some(row => row.bold === bold)) return;
+                    rows.push({ bold: bold, p: bold.parentElement, label: label });
+                });
+            });
+            return rows;
+        };
+
+        // Firmierung steht im title/alt des Logos, nicht als Text.
+        const companyName = (p) => {
+            const img = p.querySelector('img');
+            if (img) return (img.getAttribute('title') || img.getAttribute('alt') || '').trim();
+            return (p.textContent || '').replace(/^[^:]*:\s*/, '').trim();
+        };
+
+        const escapeText = (value) => String(value || '')
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+        // ── Kundendaten für den Notizzettel ────────────────────────────────
+        // Die Copy-Buttons sammeln Firma, Ansprechpartner und Ort beim
+        // Seitenaufruf schon in den lokalen Speicher; nur falls dort noch
+        // nichts steht, wird der Kundenblock der Vertragsdaten direkt gelesen.
+        const storedProject = () => {
+            try { return JSON.parse(localStorage.getItem(storage_key) || 'null') || {}; } catch (e) { return {}; }
+        };
+
+        const clientLines = () => { // "Firma / Ansprechpartner / Straße / Ort"
+            const mail = labelRows(['e-mail', 'email'])[0];
+            let paragraph = null;
+            if (mail) {
+                const row = mail.p.closest('.row');
+                if (row) paragraph = row.querySelector('p');
+            }
+            if (!paragraph) { // ohne E-Mail-Zeile: der Absatz ohne <b> mit mehreren <br>
+                scopes().some(scope => {
+                    paragraph = Array.prototype.slice.call(scope.querySelectorAll('.row p'))
+                        .find(item => !item.querySelector('b') && item.querySelectorAll('br').length >= 2) || null;
+                    return !!paragraph;
+                });
+            }
+            if (!paragraph) return [];
+            return (paragraph.innerText || '').split('\n').map(line => line.trim()).filter(Boolean);
+        };
+
+        const callInfo = () => {
+            const stored = storedProject();
+            const lines = clientLines();
+            const brandRow = labelRows(['brand'])[0];
+            return {
+                brand: stored.project_brand || (brandRow ? companyName(brandRow.p) : ''),
+                company: stored.client_brand || lines[0] || '', // Firma des Kunden
+                contact: stored.client_name || lines[1] || '', // Ansprechpartner
+                location: stored.client_location || lines[3] || '',
+                email: stored.client_email || '',
+            };
+        };
+
+        // ── "(Vorwahl: X)" neben Firma und Brand ───────────────────────────
+        const renderPrefixBadges = () => {
+            if (!settings.phone_prefix_show) return;
+            labelRows(['firma', 'brand']).forEach(row => {
+                if (row.p.querySelector('.' + PREFIX_CLASS)) return;
+                const name = companyName(row.p);
+                if (!name) return;
+                const hit = lookupPrefix(name);
+                const badge = document.createElement('small');
+                badge.className = PREFIX_CLASS + (hit ? '' : ' ' + PREFIX_CLASS + '_missing');
+                badge.textContent = hit ? '(Vorwahl: ' + hit.value + ')' : '(Vorwahl: ?)';
+                badge.dataset.cbName = name;
+                badge.title = hit
+                    ? 'Amtsholung ' + hit.value + ' – hinterlegt als "' + hit.key + '". Klick: eigenen Wert für "' + name + '" setzen.'
+                    : 'Für "' + name + '" ist keine Amtsholung hinterlegt. Klick: Wert eintragen.';
+                badge.addEventListener('click', () => editPrefix(name));
+                row.p.appendChild(document.createTextNode(' '));
+                row.p.appendChild(badge);
+            });
+        };
+
+        const editPrefix = (name) => {
+            const current = lookupPrefix(name);
+            const answer = window.prompt('Amtsholung für "' + name + '" (leer = Eintrag entfernen):', current ? current.value : '');
+            if (answer === null) return;
+            const map = Object.assign({}, settings.phone_prefixes || {});
+            if (answer.trim() === '') delete map[name];
+            else map[name] = answer.trim();
+            saveSettings({ phone_prefixes: map });
+            resetRendering();
+            refresh();
+            showNotification('Amtsholung aktualisiert');
+        };
+
+        // ── Nummern aufbereiten ────────────────────────────────────────────
+        const dialPrefix = () => { // die Brand entscheidet, wie rausgewählt wird
+            const rows = labelRows(['brand', 'firma']);
+            const brand = rows.find(row => row.label === 'brand');
+            const firma = rows.find(row => row.label === 'firma');
+            const hit = (brand && lookupPrefix(companyName(brand.p))) || (firma && lookupPrefix(companyName(firma.p)));
+            return hit ? hit.value : null;
+        };
+
+        const cleanNumber = (raw) => { // "06251/848080" -> "06251848080"
+            // "+49 (0)6251 ..." -> die Null in Klammern wird bei Vorwahl 0049 nicht gewählt
+            let digits = String(raw || '').replace(/\(\s*0\s*\)/g, '').replace(/[^\d+]/g, '');
+            digits = digits.charAt(0) + digits.slice(1).replace(/\+/g, '');
+            if (digits.charAt(0) === '+') {
+                const intl = String(settings.phone_intl_prefix === undefined ? '00' : settings.phone_intl_prefix);
+                digits = intl + digits.slice(1);
+            }
+            return digits;
+        };
+
+        const dialNumber = (raw) => {
+            const number = cleanNumber(raw);
+            if (!number) return '';
+            const prefix = dialPrefix();
+            return (prefix === null ? '' : prefix) + number;
+        };
+
+        // Ein Feld kann mehrere Nummern enthalten – am Schrägstrich wird NICHT
+        // getrennt, der steckt in der Vorwahl ("06251/848080").
+        const splitNumbers = (text) => String(text || '')
+            .split(/[;,\n|]+|\s+oder\s+/i)
+            .map(part => part.trim())
+            .filter(part => part.replace(/\D/g, '').length >= 4);
+
+        const buildLink = (raw, label) => {
+            const link = document.createElement('a');
+            const dial = dialNumber(raw);
+            const scheme = settings.phone_scheme || 'tel';
+            link.className = LINK_CLASS;
+            link.textContent = raw;
+            link.dataset.cbRaw = raw;
+            link.dataset.cbLabel = label;
+            if (dial) {
+                link.href = scheme + ':' + dial;
+                link.title = 'Über 3CX anrufen: ' + dial + (dialPrefix() === null ? ' (ohne Amtsholung – Brand steht nicht in der Liste)' : '');
+            } else {
+                link.href = '#';
+                link.title = 'Keine wählbare Nummer erkannt';
+            }
+            link.addEventListener('click', event => {
+                if (!dial) { event.preventDefault(); return; }
+                startCall(raw, dial, label);
+            });
+            return link;
+        };
+
+        const buildCopyIcon = (raw) => {
+            const icon = document.createElement('a');
+            icon.href = '#';
+            icon.className = 'glyphicon glyphicon-copy ' + COPY_CLASS;
+            icon.title = 'Nummer kopieren – mit Shift die Wählnummer inkl. Amtsholung';
+            icon.addEventListener('click', event => {
+                event.preventDefault();
+                copyToClipboard(event.shiftKey ? dialNumber(raw) : cleanNumber(raw));
+            });
+            return icon;
+        };
+
+        const renderPhoneRows = () => {
+            if (!settings.phone_links) return;
+            labelRows(['telefon', 'handy', 'mobil']).forEach(row => {
+                if (row.p.querySelector('.' + LINK_CLASS)) return;
+                const rest = Array.prototype.slice.call(row.p.childNodes).filter(node => node !== row.bold);
+                const raw = rest.map(node => node.textContent).join('').trim();
+                if (!raw) return;
+                const numbers = splitNumbers(raw);
+                if (!numbers.length) return;
+                rest.forEach(node => node.remove());
+                numbers.forEach((number, index) => {
+                    row.p.appendChild(document.createTextNode(index ? ', ' : ' '));
+                    row.p.appendChild(buildLink(number, row.label));
+                    row.p.appendChild(document.createTextNode(' '));
+                    row.p.appendChild(buildCopyIcon(number));
+                });
+            });
+        };
+
+        const resetRendering = () => { // vor einem Neuaufbau alles Eigene entfernen
+            document.querySelectorAll('.' + PREFIX_CLASS).forEach(el => el.remove());
+            document.querySelectorAll('.' + LINK_CLASS).forEach(link => {
+                link.replaceWith(document.createTextNode(link.textContent));
+            });
+            document.querySelectorAll('.' + COPY_CLASS).forEach(el => el.remove());
+        };
+
+        // ── Laufendes Telefonat ────────────────────────────────────────────
+        const call = { startedAt: 0, raw: '', dial: '', label: '', notes: '', panelOpen: false, timer: 0 };
+
+        const storeCall = () => {
+            try {
+                if (!call.startedAt) sessionStorage.removeItem(CALL_STORE);
+                else sessionStorage.setItem(CALL_STORE, JSON.stringify({ startedAt: call.startedAt, raw: call.raw, dial: call.dial, label: call.label, notes: call.notes, panelOpen: call.panelOpen }));
+            } catch (e) {}
+        };
+
+        const restoreCall = () => { // ein Reload während des Telefonats darf die Startzeit nicht verlieren
+            try {
+                const stored = JSON.parse(sessionStorage.getItem(CALL_STORE) || 'null');
+                if (stored && stored.startedAt) Object.assign(call, stored);
+            } catch (e) {}
+        };
+
+        const two = (value) => (value < 10 ? '0' : '') + value;
+
+        const elapsedText = () => {
+            const seconds = Math.max(0, Math.round((Date.now() - call.startedAt) / 1000));
+            const hours = Math.floor(seconds / 3600);
+            const rest = seconds % 3600;
+            return (hours ? hours + ':' + two(Math.floor(rest / 60)) : Math.floor(rest / 60)) + ':' + two(rest % 60);
+        };
+
+        const startText = () => {
+            const date = new Date(call.startedAt);
+            return two(date.getHours()) + ':' + two(date.getMinutes());
+        };
+
+        const startCall = (raw, dial, label) => {
+            if (!settings.phone_note) return;
+            if (call.startedAt && call.raw === raw) return; // Nachwählen derselben Nummer: Startzeit und Notizen behalten
+            call.startedAt = Date.now();
+            call.raw = raw;
+            call.dial = dial;
+            call.label = label;
+            call.notes = '';
+            call.panelOpen = settings.phone_note_panel_auto !== false; // Notizzettel gleich mit aufklappen
+            storeCall();
+            renderBar();
+            startNoteScan(); // dauert ein paar Sekunden – läuft während des Telefonats mit
+        };
+
+        const endCall = () => {
+            call.startedAt = 0;
+            call.notes = '';
+            call.panelOpen = false;
+            storeCall();
+            renderBar();
+        };
+
+        const paintBar = () => { // Leiste und Zettel laufen im Sekundentakt mit
+            if (!call.startedAt) return;
+            const bar = document.getElementById(BAR_ID);
+            if (bar) bar.querySelector('.cb_call_meta').textContent = call.raw + ' · ab ' + startText() + ' Uhr · ' + elapsedText();
+            const time = document.querySelector('#' + PANEL_ID + ' .cb_call_panel_time');
+            if (time) time.textContent = 'ab ' + startText() + ' Uhr · ' + elapsedText();
+        };
+
+        const renderBar = () => {
+            let bar = document.getElementById(BAR_ID);
+            if (!call.startedAt) {
+                if (bar) bar.remove();
+                if (call.timer) { clearInterval(call.timer); call.timer = 0; }
+                renderPanel();
+                return;
+            }
+            if (!bar) {
+                bar = document.createElement('div');
+                bar.id = BAR_ID;
+                bar.innerHTML = '<span class="cb_call_dot"></span>'
+                    + '<span class="cb_call_text"><b>Telefonat läuft</b><span class="cb_call_meta"></span></span>'
+                    + '<button type="button" class="btn btn-default btn-xs cb_call_zettel" title="Notizzettel mit den Kundendaten ein-/ausblenden"><span class="glyphicon glyphicon-pencil"></span></button>'
+                    + '<button type="button" class="btn btn-primary btn-xs cb_call_done" title="Telefonat beenden und die Telefon-Notiz in der Kundenkommunikation anlegen bzw. ergänzen">Beenden &amp; notieren</button>'
+                    + '<button type="button" class="close cb_call_cancel" title="Telefonat ohne Notiz verwerfen">×</button>';
+                document.body.appendChild(bar);
+                bar.querySelector('.cb_call_zettel').addEventListener('click', () => {
+                    call.panelOpen = !call.panelOpen; // zweiter Klick klappt den Zettel wieder zu
+                    storeCall();
+                    renderPanel();
+                });
+                bar.querySelector('.cb_call_done').addEventListener('click', () => finishCall());
+                bar.querySelector('.cb_call_cancel').addEventListener('click', () => endCall());
+            }
+            paintBar();
+            renderPanel();
+            if (!call.timer) call.timer = setInterval(paintBar, 1000);
+        };
+
+        // ── Notizzettel zum laufenden Telefonat ────────────────────────────
+        // Absichtlich kein Modal mit Backdrop: der Zettel schwebt, damit IPSI
+        // während des Gesprächs bedienbar bleibt. Verschieben am Kopf.
+        const panelNotes = () => {
+            const area = document.querySelector('#' + PANEL_ID + ' .cb_call_notes');
+            return area ? area.value : (call.notes || '');
+        };
+
+        const panelPosition = () => {
+            try { return JSON.parse(localStorage.getItem('cb_phone_panel_pos') || 'null'); } catch (e) { return null; }
+        };
+
+        const makeDraggable = (panel, handle) => {
+            let fromX = 0, fromY = 0, left = 0, bottom = 0, dragging = false;
+            const onMove = (event) => {
+                if (!dragging) return;
+                panel.style.left = Math.max(4, left + (event.clientX - fromX)) + 'px';
+                panel.style.bottom = Math.max(4, bottom - (event.clientY - fromY)) + 'px';
+            };
+            const onUp = () => {
+                if (!dragging) return;
+                dragging = false;
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+                try { localStorage.setItem('cb_phone_panel_pos', JSON.stringify({ left: panel.style.left, bottom: panel.style.bottom })); } catch (e) {}
+            };
+            handle.addEventListener('mousedown', event => {
+                if (event.target.closest('button')) return;
+                const box = panel.getBoundingClientRect();
+                fromX = event.clientX;
+                fromY = event.clientY;
+                left = box.left;
+                bottom = window.innerHeight - box.bottom;
+                dragging = true;
+                event.preventDefault();
+                document.addEventListener('mousemove', onMove);
+                document.addEventListener('mouseup', onUp);
+            });
+        };
+
+        const renderPanel = () => {
+            let panel = document.getElementById(PANEL_ID);
+            if (!call.startedAt || !call.panelOpen) {
+                if (panel) {
+                    if (call.startedAt) call.notes = panel.querySelector('.cb_call_notes').value; // nur zugeklappt: Text behalten
+                    panel.remove();
+                }
+                return;
+            }
+            if (panel) { paintBar(); return; }
+
+            const info = callInfo();
+            const fact = (label, value) => (value ? '<dt>' + escapeText(label) + '</dt><dd>' + escapeText(value) + '</dd>' : '');
+            const number = call.raw + (call.dial && call.dial !== call.raw ? ' (wählt ' + call.dial + ')' : '');
+
+            panel = document.createElement('div');
+            panel.id = PANEL_ID;
+            panel.innerHTML = '<div class="cb_call_panel_head">'
+                + '<b>Telefonat</b>'
+                + '<span class="cb_call_panel_time"></span>'
+                + '<button type="button" class="close cb_call_panel_hide" title="Zettel zuklappen – das Telefonat läuft weiter">×</button>'
+                + '</div>'
+                + '<dl class="cb_call_facts">'
+                + fact('Brand', info.brand)
+                + fact('Kunde', info.company)
+                + fact('Ansprechpartner', info.contact)
+                + fact('Ort', info.location)
+                + fact('E-Mail', info.email)
+                + fact(call.label === 'handy' ? 'Handy' : 'Telefon', number)
+                + '</dl>'
+                + '<label class="cb_call_notes_label">Notizen zum Telefonat</label>'
+                + '<textarea class="cb_call_notes" placeholder="Was wurde besprochen? Der Text landet hinter Datum, Uhrzeit und Nummer in der Telefon-Notiz."></textarea>';
+            document.body.appendChild(panel);
+
+            const saved = panelPosition(); // zuletzt hingeschobene Position
+            if (saved && saved.left) { panel.style.left = saved.left; panel.style.bottom = saved.bottom; }
+
+            const area = panel.querySelector('.cb_call_notes');
+            area.value = call.notes || '';
+            let queued = 0;
+            area.addEventListener('input', () => {
+                call.notes = area.value;
+                clearTimeout(queued);
+                queued = setTimeout(storeCall, 300); // übersteht einen Reload mitten im Gespräch
+            });
+
+            panel.querySelectorAll('.cb_call_panel_hide').forEach(button => button.addEventListener('click', () => {
+                call.notes = area.value;
+                call.panelOpen = false;
+                storeCall();
+                renderPanel();
+            }));
+            makeDraggable(panel, panel.querySelector('.cb_call_panel_head'));
+            paintBar();
+        };
+
+        // ── Notiz-Zeile ────────────────────────────────────────────────────
+        const noteLine = (doku) => {
+            const date = new Date(call.startedAt || Date.now());
+            const template = settings.phone_note_line || '{datum}, {zeit} Uhr – {nummer} | {doku}';
+            const text = String(doku || '').trim();
+            const values = {
+                '{datum}': two(date.getDate()) + '.' + two(date.getMonth() + 1) + '.' + date.getFullYear(),
+                '{zeit}': two(date.getHours()) + ':' + two(date.getMinutes()),
+                '{nummer}': call.raw || '',
+                '{waehlnummer}': call.dial || '',
+                '{dauer}': elapsedText(),
+                '{label}': call.label === 'handy' ? 'Handy' : 'Telefon',
+                '{doku}': text,
+            };
+            const hasSlot = template.indexOf('{doku}') !== -1;
+            const line = Object.keys(values).reduce((acc, key) => acc.split(key).join(values[key]), template);
+            return hasSlot || !text ? line : line + text; // gespeicherte Einstellung ohne {doku}: Doku hinten anhängen
+        };
+
+        // ── Kundenkommunikation: Panel, Grid, eigene Telefon-Notizen ───────
+        const commPanel = () => document.getElementById('customer-communications');
+        const commGrid = () => {
+            const panel = commPanel();
+            return panel ? panel.querySelector('table[id^="datagrid_table_"]') : null;
+        };
+        const gridHash = () => {
+            const grid = commGrid();
+            const match = grid && grid.id.match(/^datagrid_table_(.+)$/);
+            return match ? match[1] : '';
+        };
+        const contractNumber = () => {
+            const link = document.getElementById('customerCommunicationManage');
+            const match = link && (link.getAttribute('href') || '').match(/\/contract\/(\d+)\//);
+            return match ? match[1] : '';
+        };
+        const loginName = () => {
+            const el = document.querySelector('.userIdentity .userName');
+            return ((el && el.textContent) || '').trim().toLowerCase();
+        };
+
+        const rowsFrom = (root, page) => {
+            const grid = root.querySelector('table[id^="datagrid_table_"]');
+            if (!grid) return [];
+            return Array.prototype.slice.call(grid.querySelectorAll('tbody tr')).map(tr => {
+                const cells = tr.children;
+                const edit = cells[0] ? cells[0].querySelector('a.contractNoticeManage[href]') : null;
+                return {
+                    type: ((cells[1] && cells[1].textContent) || '').trim(),
+                    content: ((cells[2] && cells[2].textContent) || '').replace(/\s+/g, ' ').trim(),
+                    user: ((cells[4] && cells[4].textContent) || '').trim().toLowerCase(),
+                    date: ((cells[5] && cells[5].textContent) || '').replace(/\s+/g, ' ').trim(),
+                    href: edit ? edit.getAttribute('href') : '',
+                    page: page,
+                };
+            });
+        };
+
+        const isOwnPhoneNote = (row) => row.type === 'Telefon' && !!row.href && !!loginName() && row.user === loginName();
+
+        const perPageSelect = () => document.querySelector('select[name="datagrid_select_' + gridHash() + '"]');
+
+        // Das Panel lädt seine Seiten per POST nach – so lassen sich alle Seiten
+        // im Hintergrund durchsuchen. Wichtig: Seitenzahl und Einträge-pro-Seite
+        // NICHT in einem Request mischen, sonst landet man immer auf Seite 1.
+        // Der Filter (communicationType/-Service) wird dabei nie angefasst –
+        // der sitzt serverseitig in der Session und würde sonst hängen bleiben.
+        const commPost = (body) => {
+            const contract = contractNumber();
+            if (!gridHash() || !contract) return Promise.resolve(null);
+            return fetch('/contract/' + contract + '/customer/communications', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', 'X-Requested-With': 'XMLHttpRequest' },
+                body: body,
+            })
+                .then(response => (response.ok ? response.text() : ''))
+                .then(html => (html ? new DOMParser().parseFromString(html, 'text/html') : null))
+                .catch(() => null);
+        };
+
+        const setCommPerPage = (perPage) => commPost('datagrid_select_' + gridHash() + '=' + perPage); // stellt auch auf Seite 1
+        const loadCommPage = (page) => commPost('datagrid_page_' + gridHash() + '=' + page);
+
+        const findOwnPhoneNotes = async () => {
+            const found = [];
+            const seen = {};
+            const collect = (root, page) => rowsFrom(root, page).forEach(row => {
+                if (!isOwnPhoneNote(row) || seen[row.href]) return;
+                seen[row.href] = true;
+                found.push(row);
+            });
+
+            const panel = commPanel();
+            if (!panel) return found;
+            if (!settings.phone_note_scan) { collect(panel, 1); return found; }
+
+            const original = perPageSelect() ? perPageSelect().value : '5';
+            const first = await setCommPerPage(15);
+            if (!first) { collect(panel, 1); return found; }
+            collect(first, 1);
+            const pageNumbers = Array.prototype.slice.call(first.querySelectorAll('[id^="datagrid_page_"] a[data-page]'))
+                .map(link => Number(link.getAttribute('data-page')) || 0);
+            const lastPage = Math.min(pageNumbers.length ? Math.max.apply(null, pageNumbers) : 1, 40);
+            for (let page = 2; page <= lastPage; page++) {
+                const doc = await loadCommPage(page);
+                if (!doc) break;
+                collect(doc, page);
+            }
+            await setCommPerPage(original); // Seitenzustand des Panels zurückstellen
+            return found;
+        };
+
+        // Gefundene eigene Telefon-Notizen werden gemerkt, damit der Klick auf
+        // "Notiz" nicht auf die Seitensuche warten muss.
+        const noteStoreKey = () => 'cb_phone_notes_' + (contractNumber() || 'x');
+
+        const readNoteStore = () => {
+            try {
+                const list = JSON.parse(localStorage.getItem(noteStoreKey()) || '[]');
+                return Array.isArray(list) ? list : [];
+            } catch (e) { return []; }
+        };
+
+        const writeNoteStore = (list) => {
+            try { localStorage.setItem(noteStoreKey(), JSON.stringify(list.slice(0, 20))); } catch (e) {}
+        };
+
+        const mergeNoteStore = (rows) => {
+            if (!rows.length) return;
+            const list = readNoteStore();
+            rows.forEach(row => {
+                const known = list.find(item => item.href === row.href);
+                if (known) Object.assign(known, row);
+                else list.push(row);
+            });
+            writeNoteStore(list);
+        };
+
+        const forgetNote = (href) => writeNoteStore(readNoteStore().filter(item => item.href !== href));
+
+        const visibleOwnPhoneNotes = () => {
+            const panel = commPanel();
+            return panel ? rowsFrom(panel, 1).filter(isOwnPhoneNote) : [];
+        };
+
+        let noteScan = null;
+        const startNoteScan = () => {
+            if (!settings.phone_note_scan) return null;
+            if (!commPanel() || !gridHash()) return null; // Panel lädt noch – kein leeres Ergebnis merken
+            if (!noteScan) noteScan = findOwnPhoneNotes().then(rows => { writeNoteStore(rows); return rows; });
+            return noteScan;
+        };
+
+        // ── Modal der Kundenkommunikation ──────────────────────────────────
+        const whenCommModalReady = (callback) => { // Inhalt kommt per AJAX nach
+            const modal = document.getElementById('customer-communication-manage');
+            if (!modal) return;
+            let done = false;
+            const attempt = () => {
+                if (done) return;
+                const body = document.getElementById('customer-communication-body');
+                if (!modal.classList.contains('in') || !body || !body.querySelector('#notice')) return;
+                done = true;
+                observer.disconnect();
+                clearTimeout(guard);
+                setTimeout(() => callback(body), 80);
+            };
+            const observer = new MutationObserver(attempt);
+            observer.observe(modal, { attributes: true, childList: true, subtree: true, attributeFilter: ['class'] });
+            const guard = setTimeout(() => observer.disconnect(), 15000);
+            attempt();
+        };
+
+        const setTypeTelefon = (body) => {
+            const select = body.querySelector('#type');
+            if (!select) return;
+            const option = Array.prototype.slice.call(select.options).find(item => (item.textContent || '').trim() === 'Telefon')
+                || Array.prototype.slice.call(select.options).find(item => item.value === '117');
+            if (!option) return;
+            select.value = option.value;
+            select.dispatchEvent(new Event('change', { bubbles: true }));
+        };
+
+        const fillArea = (area, text) => {
+            area.value = text;
+            area.dispatchEvent(new Event('input', { bubbles: true }));
+            area.dispatchEvent(new Event('change', { bubbles: true }));
+            area.focus();
+            try { area.setSelectionRange(area.value.length, area.value.length); } catch (e) {}
+            area.scrollTop = area.scrollHeight;
+        };
+
+        const openNewNote = (line) => {
+            const trigger = document.getElementById('customerCommunicationManage');
+            if (!trigger) {
+                copyToClipboard(line);
+                return;
+            }
+            trigger.click();
+            whenCommModalReady(body => {
+                setTypeTelefon(body);
+                const area = body.querySelector('#notice');
+                if (area) fillArea(area, line);
+            });
+        };
+
+        const editLinkFor = (href) => {
+            const panel = commPanel();
+            if (!panel) return null;
+            return Array.prototype.slice.call(panel.querySelectorAll('a.contractNoticeManage[href]'))
+                .find(link => link.getAttribute('href') === href) || null;
+        };
+
+        // Liegt die Notiz auf einer anderen Seite des Panels, wird das Grid
+        // vorher auf 15 Einträge und die passende Seite umgestellt.
+        const showCommPage = (page) => new Promise(resolve => {
+            const hash = gridHash();
+            const jump = () => {
+                const link = document.querySelector('#datagrid_page_' + hash + ' a[data-page="' + page + '"]');
+                if (!link) { resolve(); return; } // ohne Link steht das Grid schon auf dieser Seite
+                link.click();
+                setTimeout(resolve, 1400);
+            };
+            const select = perPageSelect();
+            if (select && select.value !== '15') { // 15 pro Seite = dieselbe Seitenaufteilung wie beim Suchen
+                select.value = '15';
+                select.dispatchEvent(new Event('change', { bubbles: true }));
+                setTimeout(jump, 1600);
+                return;
+            }
+            jump();
+        });
+
+        const openExistingNote = async (note, line) => {
+            let link = editLinkFor(note.href);
+            if (!link) { // Notiz liegt auf einer anderen Seite des Panels
+                await showCommPage(note.page || 1);
+                link = editLinkFor(note.href);
+            }
+            if (!link) { // Notiz existiert nicht mehr -> Merker aufräumen und neu anlegen
+                forgetNote(note.href);
+                openNewNote(line);
+                return;
+            }
+            try { link.scrollIntoView({ block: 'center' }); } catch (e) {}
+            link.click();
+            whenCommModalReady(body => {
+                setTypeTelefon(body);
+                const area = body.querySelector('#notice');
+                if (!area) return;
+                const existing = area.value.replace(/\s+$/, '');
+                fillArea(area, existing ? existing + '\n\n' + line : line);
+            });
+        };
+
+        // ── Übersicht, wenn mehrere eigene Telefon-Notizen existieren ──────
+        const openNotePicker = (notes, line) => {
+            if (document.getElementById(PICKER_ID)) return;
+
+            const backdrop = document.createElement('div');
+            backdrop.className = 'modal-backdrop fade in';
+            backdrop.id = PICKER_ID + '_backdrop';
+            document.body.appendChild(backdrop);
+
+            const picker = document.createElement('div');
+            picker.id = PICKER_ID;
+            picker.className = 'modal fade';
+            picker.style.display = 'block';
+            picker.innerHTML = '<div class="modal-dialog modal-sm"><div class="modal-content">'
+                + '<div class="modal-header">'
+                + '<button type="button" class="close" id="cb_phone_picker_close">×</button>'
+                + '<h4 class="modal-title">Telefon-Notiz wählen</h4>'
+                + '</div>'
+                + '<div class="modal-body" id="cb_phone_picker_list"></div>'
+                + '</div></div>';
+            document.body.appendChild(picker);
+            requestAnimationFrame(() => picker.classList.add('in'));
+
+            const close = () => {
+                picker.classList.remove('in');
+                document.removeEventListener('keydown', onKey);
+                setTimeout(() => { picker.remove(); backdrop.remove(); }, 200);
+            };
+            const onKey = (event) => { if (event.key === 'Escape') close(); };
+            document.addEventListener('keydown', onKey);
+            picker.querySelector('#cb_phone_picker_close').addEventListener('click', close);
+            backdrop.addEventListener('click', close);
+
+            const list = picker.querySelector('#cb_phone_picker_list');
+            notes.forEach(note => {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'btn btn-default btn-block cb_phone_picker_item';
+                button.innerHTML = '<b>' + escapeText(note.date) + '</b><br><small>' + escapeText(note.content.slice(0, 90)) + '</small>';
+                button.addEventListener('click', () => { close(); openExistingNote(note, line); });
+                list.appendChild(button);
+            });
+
+            const fresh = document.createElement('button');
+            fresh.type = 'button';
+            fresh.className = 'btn btn-primary btn-block';
+            fresh.textContent = 'Neue Telefon-Notiz';
+            fresh.addEventListener('click', () => { close(); openNewNote(line); });
+            list.appendChild(fresh);
+        };
+
+        const finishCall = async () => {
+            const line = noteLine(panelNotes()); // Startzeit + Doku sichern, bevor Leiste und Zettel weg sind
+            document.querySelectorAll('.cb_call_done').forEach(button => { button.disabled = true; button.textContent = 'Suche…'; });
+
+            let notes = visibleOwnPhoneNotes();
+            const scan = startNoteScan();
+            if (scan) {
+                const scanned = await scan;
+                if (scanned) notes = scanned;
+            } else if (!notes.length) {
+                notes = readNoteStore();
+            }
+
+            endCall();
+            if (!notes.length) { openNewNote(line); return; }
+            if (notes.length === 1) { openExistingNote(notes[0], line); return; }
+            openNotePicker(notes, line);
+        };
+
+        // ── CSS ────────────────────────────────────────────────────────────
+        const style = document.createElement('style');
+        style.textContent = [
+            '.' + PREFIX_CLASS + ' { margin-left: 6px; font-size: 85%; color: #888; cursor: pointer; white-space: nowrap; }',
+            '.' + PREFIX_CLASS + ':hover { color: #337ab7; }',
+            '.' + PREFIX_CLASS + '_missing { color: #c0392b; }',
+            '.' + LINK_CLASS + ' { text-decoration: none; border-bottom: 1px dotted currentColor; }',
+            '.' + LINK_CLASS + ':hover { text-decoration: none; border-bottom-style: solid; }',
+            '.' + COPY_CLASS + ' { margin-left: 6px; font-size: 11px; color: #999; text-decoration: none; opacity: .7; }',
+            '.' + COPY_CLASS + ':hover { color: #337ab7; opacity: 1; text-decoration: none; }',
+            '#' + BAR_ID + ' { position: fixed; left: 20px; bottom: 20px; z-index: 1060; display: flex; align-items: center;',
+            '    gap: 10px; padding: 9px 12px; font-size: 12px; line-height: 1.35; background: #fff; color: #333;',
+            '    border: 1px solid #d5d5d5; border-left: 4px solid #5cb85c; border-radius: 4px; box-shadow: 0 6px 18px rgba(0,0,0,.2); }',
+            '#' + BAR_ID + ' .cb_call_dot { width: 9px; height: 9px; border-radius: 50%; background: #5cb85c; flex: 0 0 auto;',
+            '    animation: cb_call_pulse 1.4s ease-in-out infinite; }',
+            '#' + BAR_ID + ' .cb_call_text { display: flex; flex-direction: column; }',
+            '#' + BAR_ID + ' .cb_call_meta { color: #777; font-size: 11px; }',
+            '#' + BAR_ID + ' .cb_call_cancel { margin-left: 2px; font-size: 18px; line-height: 1; opacity: .5; }',
+            '#' + BAR_ID + ' .cb_call_cancel:hover { opacity: .9; }',
+            '#' + BAR_ID + ' .btn { flex: 0 0 auto; }',
+            // IPSI gibt jedem .btn .glyphicon einen rechten Abstand – im Icon-Button stört der
+            '#' + BAR_ID + ' .cb_call_zettel .glyphicon { margin: 0; }',
+            '@keyframes cb_call_pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }',
+            '#' + PANEL_ID + ' { position: fixed; left: 20px; bottom: 78px; z-index: 1061; width: 340px;',
+            '    max-width: calc(100vw - 40px); background: #fff; color: #333; font-size: 12px; line-height: 1.45;',
+            '    border: 1px solid #d5d5d5; border-radius: 4px; box-shadow: 0 6px 18px rgba(0,0,0,.2); }',
+            '#' + PANEL_ID + ' .cb_call_panel_head { display: flex; align-items: baseline; gap: 8px; padding: 8px 10px;',
+            '    background: #f5f5f5; border-bottom: 1px solid #e2e2e2; border-radius: 3px 3px 0 0; cursor: move;',
+            '    user-select: none; }',
+            '#' + PANEL_ID + ' .cb_call_panel_time { flex: 1 1 auto; color: #777; font-size: 11px; }',
+            '#' + PANEL_ID + ' .cb_call_facts { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px;',
+            '    margin: 0; padding: 8px 10px; border-bottom: 1px solid #eee; }',
+            '#' + PANEL_ID + ' .cb_call_facts dt { color: #999; font-weight: normal; white-space: nowrap; }',
+            '#' + PANEL_ID + ' .cb_call_facts dd { margin: 0; word-break: break-word; }',
+            '#' + PANEL_ID + ' .cb_call_notes_label { display: block; margin: 8px 10px 4px; color: #999; font-weight: normal; }',
+            '#' + PANEL_ID + ' .cb_call_notes { width: calc(100% - 20px); min-height: 90px; margin: 0 10px 10px; padding: 6px 8px;',
+            '    font-size: 12px; border: 1px solid #ccc; border-radius: 3px; resize: vertical; }',
+            'html.cb_tel_darkmode #' + PANEL_ID + ' { background: #262626; color: #ddd; border-color: #3d3d3d; }',
+            'html.cb_tel_darkmode #' + PANEL_ID + ' .cb_call_panel_head { background: #1f1f1f; border-color: #3d3d3d; }',
+            'html.cb_tel_darkmode #' + PANEL_ID + ' .cb_call_facts { border-color: #3d3d3d; }',
+            'html.cb_tel_darkmode #' + PANEL_ID + ' .cb_call_notes { background: #1f1f1f; color: #ddd; border-color: #3d3d3d; }',
+            '#' + PICKER_ID + ' .cb_phone_picker_item { text-align: left; white-space: normal; margin-bottom: 6px; }',
+            '#' + PICKER_ID + ' .cb_phone_picker_item small { color: #888; }',
+            'html.cb_tel_darkmode #' + BAR_ID + ' { background: #262626; color: #ddd; border-color: #3d3d3d; }',
+            'html.cb_tel_darkmode #' + BAR_ID + ' .cb_call_meta { color: #999; }',
+            'html.cb_tel_darkmode .' + PREFIX_CLASS + ' { color: #9a9a9a; }',
+        ].join('\n');
+        document.head.appendChild(style);
+
+        // ── Aufbau & Nachziehen bei DOM-Änderungen ─────────────────────────
+        const refresh = () => {
+            document.documentElement.classList.toggle('cb_tel_darkmode', !!settings.darkmode);
+            renderPrefixBadges();
+            renderPhoneRows();
+        };
+
+        let pending = 0;
+        const schedule = () => {
+            clearTimeout(pending);
+            pending = setTimeout(refresh, 250);
+        };
+
+        restoreCall();
+        renderBar();
+        if (call.startedAt) setTimeout(startNoteScan, 3000); // Reload mitten im Gespräch: Suche vorwärmen
+        refresh();
+        // Die Settings kommen erst kurz nach dem Start aus dem localStorage,
+        // die Panels teils erst per AJAX – deshalb mehrfach nachziehen.
+        setTimeout(refresh, 800);
+        setTimeout(refresh, 2500);
+        setTimeout(() => mergeNoteStore(visibleOwnPhoneNotes()), 3000); // eigene Telefon-Notizen der ersten Seite merken
+        new MutationObserver(schedule).observe(document.body, { childList: true, subtree: true });
     })();
     // ─────────────────────────────────────────────────────────────────────────
 

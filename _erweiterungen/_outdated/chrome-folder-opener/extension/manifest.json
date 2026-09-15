@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "Copy-Buttons (Folder-Extension)",
+  "version": "2.0",
+  "description": "Open Folders with the Ipsi Copy-Button extension",
+  "permissions": [
+    "nativeMessaging",
+    "scripting",
+    "activeTab"
+  ],
+  "host_permissions": ["https://ipsi.securewebsystems.net/project/detailed/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://ipsi.securewebsystems.net/project/detailed/*"],
+      "js": ["content.js"]
+    }
+  ],
+  "action": {
+    "default_title": "Folder Opener",
+    "default_icon": {
+      "16": "icon16.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    }
+  }
+}

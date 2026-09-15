@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Copy-Buttons
 // @namespace    https://github.com/zentolik
-// @version      1.05
+// @version      1.06
 // @description  doing stuff ʕ·͡ᴥ·ʔ
 // @author       Zentolik
 // @match        https://ipsi.securewebsystems.net/project/detailed/*
@@ -14,11 +14,14 @@
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_addValueChangeListener
+// @grant        GM_xmlhttpRequest
+// @connect      api.github.com
+// @connect      raw.githubusercontent.com
 // ==/UserScript==
 
 !(function() { // ʕ·͡ᴥ·ʔ hi & ty <3
     'use strict';
-    const SCRIPT_VERSION = '1.05';
+    const SCRIPT_VERSION = '1.06';
     console.log(`ʕ·͡ᴥ·ʔ *bup* v${SCRIPT_VERSION}`);
     let settings = {
         button_position: true, // ändert die position vom btn (wenn auf "false", empfähle ich "copy_icon" zu aktivieren") //
@@ -1141,6 +1144,524 @@
         if (event.key === 'Escape') closeVscCtxMenu();
     };
 
+    // ── Globale Tooltips: Bubbles statt der nativen title-Tooltips ──────
+    // Jedes Element mit einem title bekommt beim Hovern eine Bubble in der
+    // Ebene #cb_global_tooltips. Bei Elementen aus diesem Script wandert
+    // der title dabei nach data-cb_tip – sie brauchen ihn nicht mehr, und
+    // so zeigt Chrome keinen zweiten Tooltip darueber. Fremde Elemente
+    // behalten ihren title unangetastet; dort kommt der Browser-Tooltip
+    // zusaetzlich, denn ohne den title anzufassen laesst er sich nicht
+    // abschalten (auch Bootstrap leert ihn dafuer). Mehrzeilige titles (\n oder
+    // &#013;) werden gegliedert: Kopfzeile, "Label: Wert"-Zeilen und, hinter
+    // einer Leerzeile, die Bedienhinweise. Icon und Farbe kommen aus
+    // TIP_LOOK – nur dort, wo sie zeigen, was der Text nicht schon sagt.
+    //
+    // Drei Dinge halten die Bubbles ruhig, auch wenn eine Seite neu rendert:
+    //  1. die Ebene haengt an <html> statt an <body> – sonst melden die
+    //     MutationObserver der Module jede Bubble als fremde Aenderung,
+    //     rendern neu und killen damit genau die Bubble, die sie meldeten
+    //  2. eine bestehende Bubble wird weiterverwendet und nur umgesetzt,
+    //     nie neu gebaut – kein zweites Einblenden, kein Flackern
+    //  3. verliert das Ziel seinen Platz im DOM, greift tipRenew() dasselbe
+    //     Ziel unter dem Zeiger erneut. tipGuard meldet das und beobachtet
+    //     nur, solange wirklich eine Bubble steht
+    const TIPS_ID = 'cb_global_tooltips';
+    const TIP_KEY = /^([^:(){}]{1,24}):\s+(.+)$/; // "gestempelt: 8:25"
+    const TIP_NL = /\r\n|[\r\n]/;                 // Umbruch im title
+    const TIP_LOOK = [ // icon und tone auch als Funktion(el) moeglich
+        // Copy-Buttons, Einstellungen und Seitenleisten
+        { sel: '.cb_info-sign', icon: 'info-sign' },
+        { sel: '.cb_darkmode_btn', icon: 'adjust' },
+        { sel: '.cb_side_close_btn', icon: 'remove' },
+        { sel: '.cb_ver_flag', icon: 'warning-sign', tone: 'bad' },
+        { sel: '.cb_ls_deleter_btn', icon: 'th-list' },   // Projektliste
+        { sel: '.cb_user_deleter_btn', icon: 'user' },    // Userdaten
+        { sel: '.cb_sup_deleter_btn', icon: 'comment' },  // Support schreiben
+        { sel: '.cb_ls_delete_btn', icon: 'trash', tone: 'bad' },
+        { sel: '.cb_tel_copy', icon: 'duplicate' },
+        { sel: '.cb_tel_link, .cb_vorwahl', icon: 'earphone' },
+        { sel: '.cb_ps_label, .cb_special_ps_value', icon: 'time' },
+        { sel: '.cb_ms_ticket_icon', icon: 'envelope' },
+        { sel: '.cb_formix_check_btn', icon: 'check' },
+        // Arbeitsstunden-Panel
+        { sel: '.cb_wh_copy', icon: 'duplicate' },
+        { sel: '.cb_wh_sync', icon: 'refresh' },
+        { sel: '.cb_wh_cfg', icon: 'cog' },
+        { sel: '.cb_wh_kw', icon: (el) => el.querySelector('.cb_wh_shut') ? 'chevron-right' : 'chevron-down' },
+        { sel: '.cb_wh_prev', icon: 'chevron-left', tone: (el) => el.classList.contains('cb_wh_off') ? 'off' : '' },
+        { sel: '.cb_wh_next', icon: 'chevron-right', tone: (el) => el.classList.contains('cb_wh_off') ? 'off' : '' },
+        { sel: '.cb_wh_now', icon: 'calendar', tone: (el) => el.classList.contains('cb_wh_off') ? 'off' : '' },
+        { sel: '.cb_wh_rest b small', icon: 'time' },
+        { sel: '.cb_wh_sub span', icon: 'calendar' },
+        { sel: '.cb_wh_ksoll', icon: 'flag' },
+        { sel: '.cb_wh_kday', icon: 'dashboard' }, // Schnitt pro Tag
+        { sel: '.cb_wh_kist', icon: 'ok' },
+        { sel: '.cb_wh_day', icon: 'calendar' },
+        { sel: '.cb_wh_ho', icon: 'home' },
+        { sel: '.cb_wh_pend', icon: 'hourglass', tone: 'warn' },
+        { sel: '.cb_wh_plansign', icon: 'time' },
+        { sel: '.cb_wh_mhead span', icon: 'pencil' },
+        { sel: '.cb_wh_h', icon: 'pencil' },
+        { sel: '.cb_wh_minus', icon: 'minus' },
+        { sel: '.cb_wh_plus', icon: 'plus' },
+        { sel: '.cb_wh_carry em', icon: 'transfer' },
+        { sel: '.cb_wh_del', icon: 'trash', tone: 'bad' },
+        { sel: '.cb_wh_planok', icon: 'ok', tone: 'good' },
+        { sel: '.cb_wh_key', icon: 'hand-up' },
+        { sel: '.cb_wh_cfgline', icon: 'info-sign' }
+    ];
+
+    let tipAt = null;     // Element, dessen Bubbles gerade stehen
+    let tipSpot = [0, 0]; // letzte Zeigerposition, um das Ziel wiederzufinden
+
+    const tipEsc = (text) => String(text === null || text === undefined ? '' : text)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+    const tipLook = (el) => {
+        const hit = TIP_LOOK.filter(rule => el.matches(rule.sel))[0] || {};
+        const pick = (value) => (typeof value === 'function' ? value(el) : value) || '';
+        return { icon: pick(hit.icon), tone: pick(hit.tone) };
+    };
+    const tipCss = () => {
+        if (document.getElementById('cb_global_tooltips_css')) return;
+        const style = document.createElement('style');
+        style.id = 'cb_global_tooltips_css';
+        // Der Zeiger sind zwei Dreiecke uebereinander: unten eines in der
+        // Rahmenfarbe, darueber ein kleineres in Weiss. --cb_ax setzt seine
+        // Position, damit er auch bei am Rand geklemmten Bubbles stimmt.
+        style.textContent = ''
+            + '#' + TIPS_ID + '{position:fixed;left:0;top:0;width:0;height:0;'
+            +     'z-index:2147483001;pointer-events:none;}'
+            + '.cb_tip{position:fixed;left:0;top:0;display:flex;align-items:flex-start;gap:6px;'
+            +     'max-width:230px;padding:5px 8px;border:1.5px solid #d6d6d6;border-radius:5px;'
+            +     'background:#fff;color:#333;font:400 11px/1.45 Arial,sans-serif;text-align:left;'
+            +     'box-shadow:0 2px 7px rgba(0,0,0,.09);opacity:0;transition:opacity .1s;}'
+            + '.cb_tip.cb_tipin{opacity:1;}'
+            + '.cb_tip.cb_tipnum{max-width:none;white-space:nowrap;padding:3px 8px;}'
+            + '.cb_tip b{font-weight:700;color:#333;}'
+            + '.cb_tip .glyphicon{flex:0 0 auto;top:2px;font-size:10px;color:#9aa0a8;}'
+            + '.cb_tip .cb_tiphead{font-weight:700;margin-bottom:2px;}'
+            + '.cb_tip .cb_tiphint{margin-top:4px;padding-top:4px;'
+            +     'border-top:1px solid #eceef1;color:#8a919c;}'
+            + '.cb_tip .cb_tiphint b{font-weight:700;color:#6b727b;}'
+            + '.cb_tip .cb_tipval{color:#2A5298;}'
+            + '.cb_tip .cb_tipval.cb_tipfull{color:#3ba55d;}'
+            + '.cb_tip.cb_toneoff{color:#8a919c;}'
+            + '.cb_tip.cb_toneoff .glyphicon{color:#bcc2c9;}'
+            + '.cb_tip.cb_tonewarn .glyphicon{color:#d19a00;}'
+            + '.cb_tip.cb_tonebad .glyphicon{color:#c0392b;}'
+            + '.cb_tip.cb_tonegood .glyphicon{color:#3ba55d;}'
+            + '.cb_tip:before,.cb_tip:after{content:"";position:absolute;width:0;height:0;'
+            +     'left:var(--cb_ax,50%);border:7px solid transparent;}'
+            + '.cb_tip:before{margin-left:-7px;}'
+            + '.cb_tip:after{margin-left:-6px;border-width:6px;}'
+            + '.cb_tip.cb_tipdown:before{top:-15.5px;border-bottom-color:#d6d6d6;}'
+            + '.cb_tip.cb_tipdown:after{top:-12px;border-bottom-color:#fff;}'
+            + '.cb_tip.cb_tipup:before{bottom:-15.5px;border-top-color:#d6d6d6;}'
+            + '.cb_tip.cb_tipup:after{bottom:-12px;border-top-color:#fff;}';
+        document.head.appendChild(style);
+    };
+
+    const tipHost = () => {
+        let layer = document.getElementById(TIPS_ID);
+        if (!layer) {
+            tipCss();
+            layer = document.createElement('div');
+            layer.id = TIPS_ID;
+            // bewusst an <html>: so bleibt die Ebene fuer alle Observer
+            // unsichtbar, die document.body im Auge haben
+            document.documentElement.appendChild(layer);
+        }
+        return layer;
+    };
+
+    // eine vorhandene Bubble wird umgesetzt statt ersetzt: der Inhalt nur bei
+    // echter Aenderung, und cb_tipin bleibt stehen – sonst blendet sie bei
+    // jedem Neuzeichnen erneut ein
+    const tipApply = (tip, spec) => {
+        if (tip.innerHTML !== spec.html) tip.innerHTML = spec.html;
+        tip.className = 'cb_tip' + (spec.extra ? ' ' + spec.extra : '')
+            + (tip.classList.contains('cb_tipin') ? ' cb_tipin' : '');
+        // erst zurueck in die Ecke: eine alte Position wuerde die Messung
+        // einquetschen (left + shrink-to-fit) und die Bubble danach zu
+        // weit rechts stehen lassen
+        tip.style.left = '0px';
+        tip.style.top = '0px';
+        const box = tip.getBoundingClientRect(), pad = 6;
+        const high = box.height, wide = box.width;
+        const view = document.documentElement; // clientWidth/Height: ohne Scrollbalken
+        const roomBelow = view.clientHeight - spec.bottom - 9 - pad;
+        const roomAbove = spec.top - 9 - pad;
+        // unten ist die Regel; passt es dort nicht und oben ist mehr Platz,
+        // klappt die Bubble nach oben und der Zeiger nach unten
+        let below = spec.side !== 'up';
+        if (below ? (high > roomBelow && roomAbove > roomBelow)
+                  : (high > roomAbove && roomBelow > roomAbove)) below = !below;
+        // am Fensterrand wird geklemmt statt abgeschnitten
+        const left = Math.min(Math.max(Math.round(spec.x - wide / 2), pad),
+            Math.max(pad, view.clientWidth - wide - pad));
+        const top = Math.min(Math.max(Math.round(below ? spec.bottom + 9 : spec.top - 9 - high), pad),
+            Math.max(pad, view.clientHeight - high - pad));
+        tip.style.left = left + 'px';
+        tip.style.top = top + 'px';
+        tip.style.setProperty('--cb_ax', Math.round(Math.max(11, Math.min(wide - 11, spec.x - left))) + 'px');
+        tip.classList.add(below ? 'cb_tipdown' : 'cb_tipup', 'cb_tipin');
+    };
+
+    const tipDraw = (specs) => {
+        const layer = tipHost();
+        while (layer.children.length > specs.length) layer.lastChild.remove();
+        while (layer.children.length < specs.length) layer.appendChild(document.createElement('div'));
+        specs.forEach((spec, index) => tipApply(layer.children[index], spec));
+        return specs.length > 0;
+    };
+    const tipBody = (text, look) => {
+        const lines = String(text).split(TIP_NL);
+        const cut = lines.indexOf(''); // ab der Leerzeile stehen nur Hinweise
+        const body = cut < 0 ? lines : lines.slice(0, cut);
+        const hints = cut < 0 ? [] : lines.slice(cut + 1);
+        const value = (line) => { // "gestempelt: 8:25" -> Wert fett
+            const parts = TIP_KEY.exec(line);
+            return parts ? tipEsc(parts[1]) + ': <b>' + tipEsc(parts[2]) + '</b>' : tipEsc(line);
+        };
+        const hint = (line) => { // "Klick: Tag setzen" -> Bedienung fett
+            const parts = TIP_KEY.exec(line);
+            return parts ? '<b>' + tipEsc(parts[1]) + '</b> ' + tipEsc(parts[2]) : tipEsc(line);
+        };
+        const head = body.length > 1 ? '<div class="cb_tiphead">' + tipEsc(body[0]) + '</div>' : '';
+        const rows = (head ? body.slice(1) : body).map(line => '<div>' + value(line) + '</div>').join('');
+        const tail = hints.length ? '<div class="cb_tiphint">'
+            + hints.map(line => '<div>' + hint(line) + '</div>').join('') + '</div>' : '';
+        return (look.icon ? '<span class="glyphicon glyphicon-' + look.icon + '"></span>' : '')
+            + '<div>' + head + rows + tail + '</div>';
+    };
+
+    const tipShare = (label, value) => '<div>' + tipEsc(label) + ': <b class="cb_tipval'
+        + (value >= 100 ? ' cb_tipfull' : '') + '">' + value + ' %</b></div>';
+
+    // Sonderfall Fortschrittsleiste: die Prozente stehen als data-Attribute
+    // dran und werden am Endpunkt ihres Abschnitts angezeigt
+    const tipBarSpecs = (bar) => {
+        const num = (name) => {
+            const raw = bar.getAttribute(name);
+            return raw === null || raw === '' ? null : Number(raw);
+        };
+        const pct = num('data-cb_pct');
+        if (pct === null) return [];
+        const sub = num('data-cb_sub');
+        const box = bar.getBoundingClientRect();
+        const at = (value) => box.left + box.width * Math.max(0, Math.min(100, value)) / 100;
+        // beide Werte in einer Leiste -> Hauptzeitraum oben, Monat unten;
+        // steht nur einer drin, sitzt die Bubble immer unter der Leiste
+        const specs = [{
+            html: tipShare(bar.getAttribute('data-cb_scope') || 'Woche', pct), extra: 'cb_tipnum',
+            x: at(pct), top: box.top, bottom: box.bottom, side: sub === null ? 'down' : 'up'
+        }];
+        if (sub !== null) specs.push({
+            html: tipShare('Monat', sub), extra: 'cb_tipnum',
+            x: at(sub), top: box.top, bottom: box.bottom, side: 'down'
+        });
+        return specs;
+    };
+
+    const tipPlainSpecs = (el) => {
+        const text = el.getAttribute('title') || el.getAttribute('data-cb_tip');
+        if (!text) return [];
+        const look = tipLook(el);
+        const box = el.getBoundingClientRect();
+        return [{
+            html: tipBody(text, look), extra: look.tone ? 'cb_tone' + look.tone : '',
+            x: box.left + box.width / 2, top: box.top, bottom: box.bottom, side: null
+        }];
+    };
+
+    // Alles aus diesem Script traegt eine Klasse oder ID mit cb_-Praefix.
+    // Deren title darf weg, fremde Elemente bleiben unberuehrt. <html> und
+    // <body> zaehlen nicht mit – dort haengt der Darkmode-Marker.
+    const tipMine = (node) => {
+        let el = node;
+        while (el && el.nodeType === 1 && el !== document.body) {
+            if (String(el.id).indexOf('cb_') === 0) return true;
+            for (let i = 0; i < el.classList.length; i++) {
+                if (el.classList[i].indexOf('cb_') === 0) return true;
+            }
+            el = el.parentElement;
+        }
+        return false;
+    };
+
+    // naechstes Element mit einem title – ein leerer title unterdrueckt die
+    // Bubble genauso wie den Tooltip des Browsers
+    const tipOwner = (node) => {
+        let el = node && node.nodeType === 1 ? node : (node ? node.parentElement : null);
+        while (el && el.nodeType === 1) {
+            if (el.id === TIPS_ID) return null; // die eigene Ebene
+            if (el.classList.contains('cb_wh_bar') || el.hasAttribute('data-cb_tip')) return el;
+            const title = el.getAttribute('title');
+            if (title !== null) return title === '' ? null : el;
+            el = el.parentElement;
+        }
+        return null;
+    };
+
+    const tipDrop = () => {
+        if (!tipAt) return;
+        tipAt = null;
+        tipGuard.disconnect();
+        const layer = document.getElementById(TIPS_ID);
+        if (layer) layer.textContent = '';
+    };
+
+    const tipTake = (el) => {
+        const raw = el.getAttribute('title'); // eigener title: einsammeln,
+        if (raw !== null && tipMine(el)) {   // damit Chrome keinen zweiten zeigt
+            el.setAttribute('data-cb_tip', raw);
+            el.removeAttribute('title');
+        }
+        tipAt = el;
+        tipGuard.observe(document.body, { childList: true, subtree: true });
+        return tipDraw(el.classList.contains('cb_wh_bar') ? tipBarSpecs(el) : tipPlainSpecs(el));
+    };
+
+    // Wird das Ziel beim Neu-Rendern ausgetauscht, zeigt die Bubble ins Leere:
+    // also dasselbe Ziel unter dem Zeiger neu greifen statt es aufzugeben
+    const tipRenew = () => {
+        if (!tipAt || tipAt.isConnected) return;
+        const under = tipOwner(document.elementFromPoint(tipSpot[0], tipSpot[1]));
+        if (!under || !tipTake(under)) tipDrop();
+    };
+    const tipGuard = new MutationObserver(tipRenew); // laeuft nur bei offener Bubble
+
+    document.addEventListener('mouseover', (event) => {
+        tipSpot = [event.clientX, event.clientY];
+        const el = tipOwner(event.target);
+        if (!el) { tipDrop(); return; }
+        if (el === tipAt) return;
+        if (!tipTake(el)) tipDrop();
+    }, true);
+    document.addEventListener('mouseout', (event) => {
+        if (!tipAt || !tipAt.isConnected) return; // frisch gerendert -> macht tipRenew
+        if (!tipAt.contains(event.relatedTarget)) tipDrop();
+    }, true);
+    document.addEventListener('mousedown', tipDrop, true);
+    document.addEventListener('keydown', tipDrop, true);
+    window.addEventListener('scroll', tipDrop, true);
+    window.addEventListener('resize', tipDrop);
+
+    // ── Versions-Menü: alle Fassungen aus dem GitHub-Ordner _versions ───
+    // Ein Klick auf die Versions-Anzeige listet, was im Repo liegt (neueste
+    // zuerst, die laufende ist markiert). Ein Klick auf eine Version fragt
+    // nach und bietet zwei Wege: "Installieren" oeffnet die Raw-Datei, damit
+    // Tampermonkey seine Installations-Seite zeigt – das klappt nur bei
+    // *.user.js. Die .txt-Fassungen gehen ueber "Kopieren": der Code landet
+    // in der Zwischenablage und wird in Tampermonkey eingefuegt.
+    const VER_DIR = 'https://api.github.com/repos/zentolik/ipsi-buttons/contents/_versions?ref=main';
+    let verCache = null; // GitHub erlaubt nur 60 Abfragen/Stunde -> einmal holen
+    let verPick = null;  // Version, die gerade abgefragt wird
+
+    // GM_xmlhttpRequest laeuft an einer CSP der Seite vorbei; fehlt das Grant
+    // (aeltere Installation), bleibt der normale fetch
+    const verFetch = (url) => new Promise((resolve, reject) => {
+        if (typeof GM_xmlhttpRequest === 'function') {
+            GM_xmlhttpRequest({
+                method: 'GET', url: url,
+                onload: (res) => (res.status >= 200 && res.status < 300)
+                    ? resolve(res.responseText) : reject(new Error('HTTP ' + res.status)),
+                onerror: () => reject(new Error('Netzwerkfehler'))
+            });
+            return;
+        }
+        fetch(url, { cache: 'no-store' })
+            .then(res => res.ok ? res.text() : Promise.reject(new Error('HTTP ' + res.status)))
+            .then(resolve, reject);
+    });
+
+    const verNo = (name) => { // "Copy-Buttons-1.05.txt" -> "1.05"
+        const hit = /(\d+(?:\.\d+)*)$/.exec(String(name).replace(/\.(user\.js|js|txt)$/i, ''));
+        return hit ? hit[1] : '';
+    };
+    const verRank = (a, b) => { // neueste zuerst, Zahl fuer Zahl verglichen
+        const left = a.split('.'), right = b.split('.');
+        for (let i = 0; i < Math.max(left.length, right.length); i++) {
+            const diff = (Number(right[i]) || 0) - (Number(left[i]) || 0);
+            if (diff) return diff;
+        }
+        return 0;
+    };
+
+    const verLoad = () => {
+        if (verCache) return Promise.resolve(verCache);
+        return verFetch(VER_DIR).then(raw => {
+            const list = JSON.parse(raw);
+            verCache = (Array.isArray(list) ? list : [])
+                .filter(item => item.type === 'file' && /\.(user\.js|js|txt)$/i.test(item.name))
+                .map(item => ({
+                    name: item.name, url: item.download_url, version: verNo(item.name),
+                    install: /\.user\.js$/i.test(item.name), code: null, loading: null
+                }))
+                .filter(item => item.version && item.url)
+                .sort((a, b) => verRank(a.version, b.version));
+            return verCache;
+        });
+    };
+
+    const verCode = (row) => { // Code vorab holen, damit "Kopieren" im Klick bleibt
+        if (!row.loading) row.loading = verFetch(row.url).then(text => (row.code = text));
+        return row.loading;
+    };
+
+    const verCopy = (text) => {
+        const area = document.createElement('textarea');
+        area.value = text;
+        area.style.cssText = 'position:fixed;left:-9999px;top:0;';
+        document.body.appendChild(area);
+        area.select();
+        let done = false;
+        try { done = document.execCommand('copy'); } catch (err) { done = false; }
+        area.remove();
+        if (done) return Promise.resolve();
+        return navigator.clipboard ? navigator.clipboard.writeText(text)
+            : Promise.reject(new Error('Zwischenablage gesperrt'));
+    };
+    const verBox = () => document.querySelector('.cb_ver_menu:not(.cb_ver_gone)');
+    const verPaint = (html) => { const box = verBox(); if (box) box.innerHTML = html; };
+    const verNote = (text) => verPaint('<div class="cb_ver_note">' + tipEsc(text) + '</div>');
+
+    // schliesst wie die Seitenleisten-Popups: erst rauszoomen, dann raus
+    // aus dem DOM. cb_ver_gone haelt die Box bis dahin aus verBox() heraus.
+    const verClose = () => {
+        const label = document.querySelector('.cb_version');
+        if (label) label.classList.remove('cb_ver_open');
+        verPick = null;
+        const box = verBox();
+        if (!box) return;
+        box.classList.add('cb_ver_gone');
+        box.classList.remove('open');
+        box.addEventListener('transitionend', () => box.remove(), { once: true });
+        setTimeout(() => box.remove(), 400); // falls transitionend ausbleibt
+    };
+
+    const verList = () => verLoad().then(rows => {
+        if (!rows.length) { verNote('Im Ordner _versions liegt noch nichts.'); return; }
+        // rows ist absteigend sortiert, rows[0] ist also die neueste. Rot als
+        // "neu" markiert wird sie nur, wenn nicht schon sie selbst laeuft.
+        const fresh = rows[0].version !== SCRIPT_VERSION ? rows[0].version : '';
+        verPaint('<ul>' + rows.map(row => {
+            const running = row.version === SCRIPT_VERSION;
+            const newest = row.version === fresh;
+            const mark = running ? 'cb_ver_here' : (newest ? 'cb_ver_new' : '');
+            const badge = running ? 'läuft' : (newest ? 'neu' : '');
+            return '<li data-cb_ver="' + tipEsc(row.version) + '"'
+                + (mark ? ' class="' + mark + '"' : '') + '>'
+                + '<b>v' + tipEsc(row.version) + '</b>'
+                + (badge ? '<span>' + badge + '</span>' : '')
+                + '<em>' + (row.install ? 'user.js' : 'txt') + '</em>'
+                + '</li>';
+        }).join('') + '</ul>');
+    }).catch(err => verNote('Liste nicht erreichbar – ' + (err && err.message ? err.message : err)));
+
+    const verAsk = (version) => {
+        verPick = (verCache || []).filter(row => row.version === version)[0];
+        if (!verPick) return;
+        verCode(verPick).catch(() => {}); // Fehler zeigt erst das Kopieren
+        verPaint('<div class="cb_ver_ask">'
+            + '<p>Version <b>v' + tipEsc(verPick.version) + '</b> installieren?</p>'
+            + (verPick.install ? ''
+                : '<small>' + tipEsc(verPick.name) + ' ist keine .user.js – Tampermonkey kann sie'
+                    + ' nicht direkt installieren. Also kopieren und dort einfügen.</small>')
+            + '<div class="cb_ver_btns">'
+            + (verPick.install ? '<a data-cb_act="install">Installieren</a>' : '')
+            + '<a data-cb_act="copy"' + (verPick.install ? ' class="cb_ver_plain"' : '') + '>Kopieren</a>'
+            + '<a data-cb_act="back" class="cb_ver_plain">Zurück</a>'
+            + '</div></div>');
+    };
+
+    const verAct = (action) => {
+        if (action === 'back') { verList(); return; }
+        const row = verPick;
+        if (!row) return;
+        if (action === 'install') { window.open(row.url, '_blank', 'noopener'); verClose(); return; }
+        const paste = (code) => verCopy(code).then(() => {
+            showNotification('v' + row.version + ' kopiert (' + Math.round(code.length / 1024) + ' KB)');
+            verClose();
+        }).catch(err => verNote('Kopieren fehlgeschlagen – ' + (err && err.message ? err.message : err)));
+        if (row.code) { paste(row.code); return; }
+        verNote('v' + row.version + ' wird geholt …');
+        verCode(row).then(paste, err => verNote('Nicht erreichbar – ' + (err && err.message ? err.message : err)));
+    };
+
+    // ein Listener fuer alles: das Menue haengt in der Einstellungs-Box, die
+    // sich bei einem Klick nach aussen schliesst – deshalb capture + stop
+    document.addEventListener('click', (event) => {
+        const node = event.target;
+        if (!node || node.nodeType !== 1) return;
+        if (node.closest('.cb_ver_menu')) {
+            event.preventDefault();
+            event.stopPropagation();
+            const button = node.closest('[data-cb_act]');
+            const row = node.closest('[data-cb_ver]');
+            if (button) verAct(button.getAttribute('data-cb_act'));
+            else if (row) verAsk(row.getAttribute('data-cb_ver'));
+            return;
+        }
+        const label = node.closest('.cb_version');
+        if (!label) { verClose(); return; }
+        event.preventDefault();
+        event.stopPropagation();
+        if (verBox()) { verClose(); return; }
+        const box = document.createElement('div');
+        box.className = 'cb_ver_menu';
+        box.innerHTML = '<div class="cb_ver_note">Versionen werden geladen …</div>';
+        label.classList.add('cb_ver_open');
+        label.parentElement.appendChild(box);
+        // zwei Frames warten, sonst klappt die Box ohne Animation auf
+        requestAnimationFrame(() => requestAnimationFrame(() => box.classList.add('open')));
+        verList();
+    }, true);
+    document.addEventListener('keydown', (event) => { if (event.key === 'Escape') verClose(); }, true);
+
+    // Schon beim Laden nachsehen, ob es eine neuere Fassung gibt, und die
+    // Versions-Anzeige dann mit einem roten Ausrufezeichen markieren. Das
+    // Ergebnis haelt eine Stunde im localStorage – sonst verbraucht jeder
+    // offene IPSI-Tab eine der 60 GitHub-Abfragen pro Stunde.
+    const VER_SEEN = 'cb_ver_seen';
+    let verNewest = null;
+
+    const verFlag = () => {
+        const label = document.querySelector('.cb_version');
+        if (!label) return; // die Einstellungen stehen noch nicht
+        const old = label.querySelector('.cb_ver_flag');
+        // verRank sortiert absteigend: < 0 heisst "neuer als das, was laeuft"
+        if (!verNewest || verRank(verNewest, SCRIPT_VERSION) >= 0) {
+            if (old) old.remove();
+            return;
+        }
+        const flag = old || document.createElement('span');
+        flag.className = 'cb_ver_flag';
+        flag.textContent = '!';
+        flag.setAttribute('title', 'v' + verNewest + ' liegt bereit – klicken zum Wechseln');
+        if (!old) label.appendChild(flag);
+    };
+
+    const verCheck = () => {
+        let seen = null;
+        try { seen = JSON.parse(localStorage.getItem(VER_SEEN) || 'null'); } catch (err) { seen = null; }
+        if (seen && seen.newest && Date.now() - seen.time < 3600000) {
+            verNewest = seen.newest;
+            verFlag();
+            return;
+        }
+        verLoad().then(rows => {
+            verNewest = rows.length ? rows[0].version : null;
+            try {
+                localStorage.setItem(VER_SEEN, JSON.stringify({ time: Date.now(), newest: verNewest }));
+            } catch (err) {} // privater Modus o.ae. – dann eben bei jedem Laden
+            verFlag();
+        }).catch(() => {}); // GitHub nicht erreichbar -> beim naechsten Laden erneut
+    };
+    verCheck();
+
+
     const createSettings = () => {
         const style = document.createElement('style');
         let cb_background = '#f2f5ff',
@@ -1152,6 +1673,9 @@
               bouncy_switch_transition = 'cubic-bezier(0.25, 1, 0.5, 1.55)';
         const settingStyles = () => {
         style.textContent = `
+            /* 'Actor' mitliefern – lokal installiert hat sie fast niemand,
+               ohne sie sieht das Popup bei jedem anders aus */
+            @import url('https://fonts.googleapis.com/css2?family=Actor&display=swap');
             :root {
                 --cb_background: ${cb_background};
                 --cb_background_dark: ${cb_background_dark};
@@ -1239,9 +1763,6 @@
             .cb_container .cb_settings .cb_sup_deleter_btn {
                 right: calc((5px * 3) + (15px * 4));
             }
-            .cb_container .cb_settings .cb_git_updater_deleter_btn {
-                right: calc((5px * 4) + (15px * 5));
-            }
             .cb_container .cb_settings .settings_title {
                 font-size: 14px;
                 font-family: sans-serif;
@@ -1272,11 +1793,196 @@
                 -webkit-user-select: none;
                 -ms-user-select: none;
             }
+            /* Versions-Anzeige ist ein Menue – der Pfeil zeigt, dass man klicken kann */
+            .cb_container .cb_settings .cb_version {
+                display: inline-flex;
+                align-items: center;
+                gap: 5px;
+                cursor: pointer;
+                transition: opacity 0.2s ease-in-out;
+            }
+            .cb_container .cb_settings .cb_version:hover,
+            .cb_container .cb_settings .cb_version.cb_ver_open {
+                opacity: 1;
+            }
+            .cb_container .cb_settings .cb_version .cb_ver_caret {
+                width: 0;
+                height: 0;
+                border: 4px solid transparent;
+                border-top-color: currentColor;
+                margin-top: 4px;
+                transition: transform 0.2s ease-in-out;
+            }
+            .cb_container .cb_settings .cb_version.cb_ver_open .cb_ver_caret {
+                transform: rotate(180deg);
+                margin-top: -4px;
+            }
+            /* roter Punkt ueber der Versions-Anzeige, wenn es was Neueres gibt.
+               Das Ausrufezeichen nimmt die Grundfarbe der Box, sitzt also im
+               Light- wie im Darkmode richtig */
+            .cb_container .cb_settings .cb_version .cb_ver_flag {
+                position: absolute;
+                right: 100%;
+                top: 42%;
+                width: 15px;
+                height: 15px;
+                border-radius: 50%;
+                background-color: var(--cb_deactivated);
+                color: var(--cb_background);
+                font: 700 11px/15px Arial, sans-serif;
+                text-align: center;
+                text-shadow: none;
+                transform: translate(-2px,-50%);
+                transition: background-color 0.25s ease-in-out, color 0.25s ease-in-out;
+            }
+            /* Das Menue liegt auf der Box, nimmt deren Grundfarbe und hebt sich
+               nur ueber Rahmen und Schatten ab – so passt es in beiden Modi */
+            .cb_container .cb_settings .cb_ver_menu {
+                position: absolute;
+                right: 15px;
+                bottom: 34px;
+                z-index: 5;
+                min-width: 195px;
+                max-width: 255px;
+                max-height: 215px;
+                overflow-y: auto;
+                padding: 6px;
+                border: 1px solid rgba(127, 127, 127, .35);
+                border-radius: 10px;
+                background-color: var(--cb_background);
+                box-shadow: 0 6px 18px rgba(0, 0, 0, .35);
+                color: var(--cb_font);
+                font-family: 'Actor', 'Segoe UI', Arial, sans-serif;
+                font-size: 13px;
+                font-weight: bolder;
+                text-align: left;
+                text-shadow: none;
+                /* poppt auf wie die Seitenleisten-Popups */
+                transform: scale(0.000001);
+                transform-origin: bottom right;
+                transition: transform 0.2s ease-in-out;
+            }
+            .cb_container .cb_settings .cb_ver_menu.open {
+                transform: scale(1);
+                transition: transform 0.35s ${bouncy_transition};
+            }
+            /* die helle Standard-Scrollleiste faellt in der dunklen Box auf */
+            .cb_container .cb_settings .cb_ver_menu {
+                scrollbar-width: thin;
+                scrollbar-color: rgba(127, 127, 127, .5) transparent;
+            }
+            .cb_container .cb_settings .cb_ver_menu::-webkit-scrollbar {
+                width: 8px;
+            }
+            .cb_container .cb_settings .cb_ver_menu::-webkit-scrollbar-thumb {
+                border: 2px solid transparent;
+                border-radius: 4px;
+                background-clip: content-box;
+                background-color: rgba(127, 127, 127, .5);
+            }
+            .cb_container .cb_settings .cb_ver_menu::-webkit-scrollbar-track {
+                background-color: transparent;
+            }
+            .cb_container .cb_settings .cb_ver_menu ul {
+                margin: 0;
+                padding: 0;
+                list-style: none;
+            }
+            .cb_container .cb_settings .cb_ver_menu li {
+                display: flex;
+                align-items: center;
+                gap: 7px;
+                padding: 5px 8px;
+                border-radius: 6px;
+                cursor: pointer;
+                transition: background-color 0.15s ease-in-out;
+            }
+            .cb_container .cb_settings .cb_ver_menu li:hover {
+                background-color: rgba(127, 127, 127, .18);
+            }
+            .cb_container .cb_settings .cb_ver_menu li b {
+                color: var(--cb_font_active);
+            }
+            .cb_container .cb_settings .cb_ver_menu li.cb_ver_here b {
+                color: var(--cb_active);
+            }
+            .cb_container .cb_settings .cb_ver_menu li.cb_ver_new b {
+                color: var(--cb_deactivated);
+            }
+            .cb_container .cb_settings .cb_ver_menu li.cb_ver_new span {
+                background-color: var(--cb_deactivated);
+            }
+            .cb_container .cb_settings .cb_ver_menu li span {
+                padding: 1px 5px;
+                border-radius: 5px;
+                background-color: var(--cb_active);
+                color: #1b1b1b; /* das Gruen ist in beiden Modi hell – dunkle Schrift liest sich darauf */
+                font-size: 9px;
+                text-transform: uppercase;
+            }
+            .cb_container .cb_settings .cb_ver_menu li em {
+                margin-left: auto;
+                font-style: normal;
+                font-size: 10px;
+                font-weight: normal;
+                opacity: 0.75;
+            }
+            .cb_container .cb_settings .cb_ver_note {
+                padding: 6px 8px;
+                font-size: 12px;
+                font-weight: normal;
+                line-height: 1.45;
+            }
+            .cb_container .cb_settings .cb_ver_ask {
+                padding: 6px 8px;
+            }
+            .cb_container .cb_settings .cb_ver_ask p {
+                margin: 0 0 7px;
+                color: var(--cb_font_active);
+                font-size: 13px;
+                font-weight: normal;
+                line-height: 1.35;
+            }
+            .cb_container .cb_settings .cb_ver_ask small {
+                display: block;
+                margin: -2px 0 8px;
+                font-size: 10px;
+                font-weight: normal;
+                line-height: 1.45;
+                opacity: 0.8;
+            }
+            .cb_container .cb_settings .cb_ver_btns {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+            }
+            .cb_container .cb_settings .cb_ver_btns a {
+                padding: 4px 9px;
+                border-radius: 6px;
+                background-color: var(--cb_active);
+                color: #1b1b1b; /* das Gruen ist in beiden Modi hell – dunkle Schrift liest sich darauf */
+                font-size: 12px;
+                font-weight: normal;
+                text-decoration: none;
+                cursor: pointer;
+                transition: background-color 0.15s ease-in-out;
+            }
+            .cb_container .cb_settings .cb_ver_btns a:hover {
+                background-color: var(--cb_active_dark);
+            }
+            .cb_container .cb_settings .cb_ver_btns a.cb_ver_plain {
+                background-color: transparent;
+                color: var(--cb_font);
+            }
+            .cb_container .cb_settings .cb_ver_btns a.cb_ver_plain:hover {
+                background-color: rgba(127, 127, 127, .18);
+                color: var(--cb_font_active);
+            }
             .cb_container .cb_settings .cb_setting {
                 display: flex;
                 max-width: fit-content;
                 color: var(--cb_font);
-                font-family: 'Actor', monospace, sans-serif;
+                font-family: 'Actor', 'Segoe UI', Arial, sans-serif;
                 font-weight: bolder;
                 transition: color 0.25s ease-in-out;
                 user-select: none;
@@ -1287,8 +1993,14 @@
             }
             .cb_container .cb_settings .cb_setting .setting_title {
                 display: inline-block;
-                min-width: 185px;
+                min-width: 230px;
                 font-size: 18px;
+            }
+            .cb_container .cb_settings .cb_setting .setting_title .cb_set_icon {
+                margin-right: 7px;
+                font-size: 13px;
+                top: -1px;
+                opacity: 0.6;
             }
             .cb_container .cb_settings .cb_setting input:not([type="text"]) {
                 display: none;
@@ -1832,7 +2544,7 @@
             }
             .cb_vsc_popup .cb_vsc_item:hover, .cb_ctx_menu .cb_vsc_item:hover {
                 background: var(--cb_active);
-                color: #fff;
+                color: #1b1b1b; /* weiss auf dem hellen Gruen war kaum zu lesen */
             }
             .cb_vsc_popup .cb_vsc_item .glyphicon, .cb_ctx_menu .cb_vsc_item .glyphicon {
                 font-size: 11px;
@@ -1978,15 +2690,14 @@
                 <span class="cb_ls_deleter_btn glyphicon glyphicon-edit" title="Lokalen Speicher verwalten"><span></span></span>
                 <span class="cb_user_deleter_btn glyphicon glyphicon-user" title="Userdaten verwalten"><span></span></span>
                 <span class="cb_sup_deleter_btn glyphicon glyphicon-comment" title="Support schreiben"><span></span></span>
-                <a class="cb_git_updater_deleter_btn glyphicon glyphicon-refresh" title="Jetzt Ipsi-Buttons updaten" href="https://github.com/zentolik/ipsi-buttons/raw/main/Copy-Buttons.user.js" target="_blank"></a>
 
                 <span class="settings_title">Settings</span>
-                <span class="cb_version">v${SCRIPT_VERSION}</span>
+                <span class="cb_version" title="Version wechseln">v${SCRIPT_VERSION}<span class="cb_ver_caret"></span></span>
 
                 <div class="cb_setting">
                     <input type="checkbox" id="copy_work_button" name="work-pfad"/>
                     <label class="cb_switch" for="copy_work_button">
-                        <span class="setting_title">Pfad Erweitern <span class="glyphicon glyphicon-info-sign cb_info-sign" title="Pfad vom Copy-Button führt bis zum work-Ordner."></span></span>
+                        <span class="setting_title"><span class="glyphicon glyphicon-folder-open cb_set_icon"></span>Pfad Erweitern <span class="glyphicon glyphicon-info-sign cb_info-sign" title="Pfad vom Copy-Button geht bis zum work-Ordner."></span></span>
                         <span class="box"></span>
                     </label>
                 </div>
@@ -1994,7 +2705,7 @@
                 <div class="cb_setting">
                     <input type="checkbox" id="copy_icon" name="copy-icon"/>
                     <label class="cb_switch" for="copy_icon">
-                        <span class="setting_title">Icons (kein Text) <span class="glyphicon glyphicon-info-sign cb_info-sign" title="Copy-Icon als Button-Inhalt, anstatt Text."></span></span>
+                        <span class="setting_title"><span class="glyphicon glyphicon-picture cb_set_icon"></span>Icons (kein Text) <span class="glyphicon glyphicon-info-sign cb_info-sign" title="Copy-Button zeigt ein Icon statt Text."></span></span>
                         <span class="box"></span>
                     </label>
                 </div>
@@ -2002,7 +2713,7 @@
                 <div class="cb_setting">
                     <input type="checkbox" id="delete_button" name="delete-button"/>
                     <label class="cb_switch" for="delete_button">
-                        <span class="setting_title">Delete-Button <span class="glyphicon glyphicon-info-sign cb_info-sign" title="Ein Delete-Button, der beim klicken die Projekt-Daten des aktuellen Projektes, aus den lokalen Daten, löscht.&#013;Nützlich, um die lokalen Daten sauber zu halten, aber keine notwendigkeit."></span></span>
+                        <span class="setting_title"><span class="glyphicon glyphicon-trash cb_set_icon"></span>Delete-Button <span class="glyphicon glyphicon-info-sign cb_info-sign" title="Löscht die lokal gespeicherten Daten des aktuellen Projekts."></span></span>
                         <span class="box"></span>
                     </label>
                 </div>
@@ -2010,7 +2721,7 @@
                 <div class="cb_setting">
                     <input type="checkbox" id="vsc_open" name="vsc-open"/>
                     <label class="cb_switch" for="vsc_open">
-                        <span class="setting_title">VSC-Ordner-Öffner <span class="glyphicon glyphicon-info-sign cb_info-sign" title="Linksklick auf den Pfad-Button listet die Ordner im Pfad und öffnet sie direkt in Visual Studio Code (als neues Fenster).&#013;Bei mehreren Ordnern erscheint eine Auswahl, bei genau einem Ordner öffnet er sich sofort.&#013;Rechtsklick öffnet ein Menü: Mit VSC öffnen / Im Explorer öffnen.&#013;Benötigt den lokalen ipsi-vsc-helper (127.0.0.1:48620)."></span></span>
+                        <span class="setting_title"><span class="glyphicon glyphicon-console cb_set_icon"></span>VSC-Ordner-Öffner <span class="glyphicon glyphicon-info-sign cb_info-sign" title="Linksklick auf den Pfad-Button öffnet die Ordner in VS Code, Rechtsklick wahlweise im Explorer.&#013;Braucht den lokalen ipsi-vsc-helper (127.0.0.1:48620)."></span></span>
                         <span class="box"></span>
                     </label>
                 </div>
@@ -2018,7 +2729,7 @@
                 <div class="cb_setting">
                     <input type="checkbox" id="sandbox_check" name="sandbox-check"/>
                     <label class="cb_switch" for="sandbox_check">
-                        <span class="setting_title">Sandbox Check <span class="glyphicon glyphicon-info-sign cb_info-sign" title="Öffnet beim Laden der Projektseite nacheinander alle Formix-Einträge, prüft ob die Sandbox aktiviert ist und schließt das Popup direkt wieder (es wird nichts gespeichert).&#013;Das Ergebnis wird in der Status-Spalte markiert: checked (grün) / unchecked (rot).&#013;Der Formix-Schnellbutton aktualisiert die Markierung immer – unabhängig von diesem Schalter."></span></span>
+                        <span class="setting_title"><span class="glyphicon glyphicon-check cb_set_icon"></span>Sandbox Check <span class="glyphicon glyphicon-info-sign cb_info-sign" title="Prüft beim Laden alle Formix-Einträge auf aktivierte Sandbox und markiert das Ergebnis in der Status-Spalte.&#013;Der Formix-Schnellbutton aktualisiert die Markierung immer."></span></span>
                         <span class="box"></span>
                     </label>
                 </div>
@@ -2026,7 +2737,7 @@
                 <div class="cb_setting">
                     <input type="checkbox" id="ps_labels" name="ps-labels"/>
                     <label class="cb_switch" for="ps_labels">
-                        <span class="setting_title">PS-Labels <span class="glyphicon glyphicon-info-sign cb_info-sign" title="Rechnet die PS-Angaben in der Meilensteine-Übersicht in Std./Min. um und zeigt sie als Label hinter der PS-Angabe an (inkl. Vergleich mit der Arbeitszeit).&#013;Deaktiviert werden die Labels wieder von der Seite entfernt."></span></span>
+                        <span class="setting_title"><span class="glyphicon glyphicon-tags cb_set_icon"></span>PS-Labels <span class="glyphicon glyphicon-info-sign cb_info-sign" title="Rechnet die PS-Angaben in Std./Min. um und zeigt sie als Label dahinter."></span></span>
                         <span class="box"></span>
                     </label>
                 </div>
@@ -2034,14 +2745,14 @@
                 <div class="cb_setting">
                     <input type="checkbox" id="auto_collect" name="auto-collect"/>
                     <label class="cb_switch" for="auto_collect">
-                        <span class="setting_title">Auto-Daten <span class="glyphicon glyphicon-info-sign cb_info-sign" title="Liest die Projektdaten (KD-Nr., DFS-Speicherort, Kundendaten usw.) automatisch beim Laden der Projektseite aus.&#013;Der DFS-Speicherort kommt direkt über die DFS-API – das Domains-Panel wird dafür nicht mehr gebraucht.&#013;Nur falls die API nicht antwortet, wird das Panel kurz unsichtbar geöffnet und danach wieder zugeklappt."></span></span>
+                        <span class="setting_title"><span class="glyphicon glyphicon-download-alt cb_set_icon"></span>Auto-Daten <span class="glyphicon glyphicon-info-sign cb_info-sign" title="Liest die Projektdaten (KD-Nr., DFS-Speicherort, Kundendaten) beim Laden automatisch aus."></span></span>
                         <span class="box"></span>
                     </label>
                 </div>
 
                 <div class="cb_setting">
                     <label class="cb_switch" for="cb_default_email_client">
-                        <span class="setting_title always_active">E-Mail Client <span class="glyphicon glyphicon-info-sign cb_info-sign" title="Gib an, ob das veschicken von E-Mail über die Outlook-App oder den Browser laufen soll."></span></span>
+                        <span class="setting_title always_active"><span class="glyphicon glyphicon-envelope cb_set_icon"></span>E-Mail Client <span class="glyphicon glyphicon-info-sign cb_info-sign" title="E-Mails über die Outlook-App oder den Browser verschicken."></span></span>
                         <select id="cb_default_email_client" class="box" name="cb_default_email_client">
                           <option value="browser">Browser</option>
                           <option value="app">Applikation</option>
@@ -2051,13 +2762,13 @@
 
                 <div class="cb_setting">
                     <label class="cb_switch" for="drive_field">
-                        <span class="setting_title always_active">Laufwerk <span class="glyphicon glyphicon-info-sign cb_info-sign" title="Gib an, in welchem Laufwerk sich deine EDO befindet."></span></span>
+                        <span class="setting_title always_active"><span class="glyphicon glyphicon-hdd cb_set_icon"></span>Laufwerk <span class="glyphicon glyphicon-info-sign cb_info-sign" title="Laufwerk, in dem deine EDO liegt."></span></span>
                         <input type="text" id="drive_field" class="box" name="drive_field-button" placeholder="${settings.copy_drive.trim().toUpperCase()}"/>
                     </label>
                 </div>
 
                 <div class="cb_setting color_settings popup_settings">
-                    <span class="popup_title setting_title always_active">Button-Farbe <span class="glyphicon glyphicon-info-sign cb_info-sign" title="Passe die Farbe, des Copy-Buttons, an."></span></span>
+                    <span class="popup_title setting_title always_active"><span class="glyphicon glyphicon-tint cb_set_icon"></span>Button-Farbe <span class="glyphicon glyphicon-info-sign cb_info-sign" title="Farbe des Copy-Buttons."></span></span>
                     <div class="popup_container">
                         <span class="color_btn popup_btn"></span>
                         <div class="color_picker popup_content">
@@ -2094,6 +2805,7 @@
         `;
 
         document.querySelector('.copyBtnContainer').appendChild(cbContainer);
+        verFlag(); // Versions-Anzeige gibt es erst jetzt
 
         const cb_darkmode_btn = document.querySelector('.cb_darkmode_btn');
         darkModeChecker(cb_darkmode_btn);
@@ -2552,6 +3264,7 @@
                 <option value="mdomain">Remove m.domain</option>
                 <option value="ohsnap">Oh snap! DFS deployment failed</option>
                 <option value="backup">Backup</option>
+                <option value="shophosting">Shop | Special Hosting anfragen</option>
             `;
 
             const forms = {
@@ -2565,7 +3278,8 @@
                     { label: 'Backup-Domain', type: 'text', id: 'cb_backup_domain', placeholder: 'Hier die Backup-Domain', required: true },
                     { label: 'Website-Typ', type: 'select', id: 'cb_backup_type', options: ['DFS', 'DEMO', 'LIVE'], required: true },
                     { label: 'Backup-Zeitpunkt', type: 'datetime-local', id: 'cb_backup_datetime', required: true }
-                ])
+                ]),
+                shophosting: createForm('cb_bg_shophosting_form', []) // keine Eingaben noetig
             };
 
             supContent.appendChild(viscompSelect);
@@ -2622,13 +3336,13 @@
                         case 'mdomain': {
                             const domain = document.getElementById('cb_mdomain').value.trim();
                             subject = `${projectData.client_id} | ${projectData.client_domain} | Remove m.domain`;
-                            body = `Hey,\n\ncould you guys please delete/remove the m.domain.\n\nDomain: ${domain}\nCustomer NR.: ${projectData.client_id}\n\nwith best regards\n${name}`;
+                            body = `Hey,\n\ncould you guys please delete/remove the m.domain.\n\nDomain: ${domain}\nCustomer ID: ${projectData.client_id}\n\nwith best regards\n${name}`;
                             break;
                         }
                         case 'ohsnap': {
                             const dfs = document.getElementById('cb_dfsdomain').value.trim();
                             subject = `${projectData.client_id} | ${projectData.client_domain} | Oh snap! DFS deployment failed`;
-                            body = `Hey,\n\nCould you please reset my DFS? I have an \"Oh snap! DFS deployment failed\"-error. Just Resetting the project would be fine.\n\nDFS: ${dfs}\nCustomer NR.: ${projectData.client_id}\n\nwith best regards\n${name}`;
+                            body = `Hey,\n\nCould you please reset my DFS? I have an \"Oh snap! DFS deployment failed\"-error. Just Resetting the project would be fine.\n\nDFS: ${dfs}\nCustomer ID: ${projectData.client_id}\n\nwith best regards\n${name}`;
                             break;
                         }
                         case 'backup': {
@@ -2645,7 +3359,15 @@
                             })();
 
                             subject = `${projectData.client_id} | ${projectData.client_domain} | Backup`;
-                            body = `Hello guys,\n\ncould you please load a backup of the ${type} website, restoring it to the state as of ${date}, at ${timeFormatted} (CET / GMT+1)?\n\nBackup Domain: ${domain}\nCustomer NR.: ${projectData.client_id}\n\nwith best regards\n${name}`;
+                            body = `Hello guys,\n\ncould you please load a backup of the ${type} website, restoring it to the state as of ${date}, at ${timeFormatted} (CET / GMT+1)?\n\nBackup Domain: ${domain}\nCustomer ID: ${projectData.client_id}\n\nwith best regards\n${name}`;
+                            break;
+                        }
+                        case 'shophosting': {
+                            // ohne Eingabefelder – Kundennummer und Domain stehen
+                            // schon in den Projektdaten, der Link in der Adresszeile
+                            const ipsiLink = location.origin + location.pathname;
+                            subject = `${projectData.client_id} | ${projectData.client_domain} | Special Hosting request for shop domain`;
+                            body = `Hey,\n\nI would like to request the Special Hosting for a shop domain.\n\nProject: ${ipsiLink}\nCustomer ID: ${projectData.client_id}\n\nThere is currently no shop domain available in the IPSI project, so I cannot proceed with the shop installation. Could you please set up the Special Hosting for this project?\n\nPlease let me know once it is available or if you need any further information from my side.\n\nwith best regards\n${name}`;
                             break;
                         }
                     }
@@ -5683,9 +6405,15 @@
             + '#cb_wh_panel .cb_wh_bar.cb_wh_mini{height:4px;margin:0 0 6px;background:#eef0f3;}'
             + '#cb_wh_panel .cb_wh_bar.cb_wh_mini i{background:#93a7c9;}'
             + '#cb_wh_panel .cb_wh_bar.cb_wh_mini.cb_wh_over i{background:#84c9a1;}'
-            + '#cb_wh_panel .cb_wh_kpis{display:flex;justify-content:space-between;font-size:11px;color:#777;margin-bottom:10px;}'
+            // drei echte Spalten statt space-between: Soll links, Ø / Tag genau
+            // mittig, Ist rechts. Die 1fr auf beiden Seiten halten die Mitte
+            // mittig, egal wie lang die Aussenspalten ausfallen
+            + '#cb_wh_panel .cb_wh_kpis{display:flex;justify-content:space-between;'
+            +     'font-size:11px;color:#777;margin-bottom:10px;}'
             + '#cb_wh_panel .cb_wh_kpis b{display:block;font-size:13px;color:#333;}'
             + '#cb_wh_panel .cb_wh_kpis span{white-space:nowrap;}'
+            + '#cb_wh_panel .cb_wh_kpis .cb_wh_kday{text-align:center;}'
+            + '#cb_wh_panel .cb_wh_kpis .cb_wh_kist{text-align:right;}'
             // Die Scrollleiste der Seite darf beim Hoehenwechsel nicht auftauchen und
             // verschwinden – sonst wird die ganze Bootstrap-Spalte schmaler und das
             // Panel zappelt in der Breite. Der Platz wird deshalb dauerhaft reserviert.
@@ -6127,9 +6855,12 @@
                 +         '</em>' : '')
                 +     '</span>'
                 + '</div>'
-                + '<div class="cb_wh_bar' + (restDone ? ' cb_wh_over' : '') + '" title="'
-                +         esc((isMonth ? 'Monat: ' : 'Woche: ') + percent + ' %'
-                +             (sub && !isMonth ? ' · Monat: ' + subPercent + ' %' : '')) + '">'
+                // Prozente reisen als data-Attribute mit: die Bubbles sitzen
+                // dann genau am Endpunkt ihres Abschnitts (siehe tipBar)
+                + '<div class="cb_wh_bar' + (restDone ? ' cb_wh_over' : '') + '"'
+                +         ' data-cb_scope="' + (isMonth ? 'Monat' : 'Woche') + '"'
+                +         ' data-cb_pct="' + percent + '"'
+                +         (sub && !isMonth ? ' data-cb_sub="' + subPercent + '"' : '') + '>'
                 +     '<i style="width:' + percent + '%"></i>'
                 // Punkt-Raster in zwei Abschnitten: über der Wochenleiste weiß, auf dem
                 // leeren Balken in der Farbe der Wochenleiste. Beide Ebenen sind voll
@@ -6141,10 +6872,10 @@
                         : '')
                 + '</div>'
                 + '<div class="cb_wh_kpis">'
-                +     '<span title="' + esc(sollTitle) + '">Soll' + (isMonth ? ' (Monat)' : '') + '<b>' + cbWhFmt(main.targetMin) + '</b></span>'
-                +     '<span title="' + (isMonth ? 'Gearbeitete Stunden in diesem Monat' : 'Gearbeitete Stunden diese Woche') + '">Ist<b>' + cbWhFmt(main.doneMin) + '</b></span>'
-                +     '<span title="' + esc('Rest verteilt auf die verbleibenden Arbeitstage ('
+                +     '<span class="cb_wh_ksoll" title="' + esc(sollTitle) + '">Soll' + (isMonth ? ' (Monat)' : '') + '<b>' + cbWhFmt(main.targetMin) + '</b></span>'
+                +     '<span class="cb_wh_kday" title="' + esc('Rest verteilt auf die verbleibenden Arbeitstage ('
                 +         main.openDays + (main.openDays === 1 ? ' Arbeitstag' : ' Arbeitstage') + ')') + '">&#216; / Tag<b>' + perDay + '</b></span>'
+                +     '<span class="cb_wh_kist" title="' + (isMonth ? 'Gearbeitete Stunden in diesem Monat' : 'Gearbeitete Stunden diese Woche') + '">Ist<b>' + cbWhFmt(main.doneMin) + '</b></span>'
                 + '</div>'
                 + '<div class="cb_wh_nav">'
                 +     '<a class="cb_wh_prev glyphicon glyphicon-chevron-left' + (prevOk ? '' : ' cb_wh_off') + '" title="' + esc(prevTitle) + '"></a>'
@@ -6848,9 +7579,13 @@
             'Euroweb': '1',
             'United Media AG': '2',
             'Internet Online Media GmbH': '3',
+            'Internet Media': '3',
             'WN Online-Service GmbH & Co. KG': '4',
+            'WN OnlineService': '4',
             'Westfalen-Blatt OnlineService': '5',
-            'STZ Online-Service GmbH': '6',
+            'WESTFALEN-BLATT': '5',
+            'Stuttgarter Zeitung Online-Service GmbH Deutschland': '6',
+            'Stuttgarter Zeitung': '6',
             'um united media Switzerland AG': '7',
             'reeach by Onlane GmbH': '8',
             'Pkw.de Digital Mobility Solutions GmbH': '9',

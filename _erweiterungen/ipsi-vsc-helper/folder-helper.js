@@ -1,5 +1,5 @@
 /* ==================================================================
-   ipsi-vsc-helper  v1.2
+   ipsi-vsc-helper  v1.3
    ------------------------------------------------------------------
    Lokaler Helfer für das Copy-Buttons-Userscript (VSC-Ordner-Öffner).
 

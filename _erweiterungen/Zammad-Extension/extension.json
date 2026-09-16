@@ -1,0 +1,40 @@
+{
+  "name": "Zammad Extension",
+  "version": "0.04",
+  "versionFrom": "Zammad-Extension.user.js",
+  "kind": "userscript",
+  "icon": "envelope",
+  "install": "Zammad-Extension.user.js",
+  "info": "Erstellt Zammad-Tickets direkt aus IPSI heraus – die Nachfolgerin der alten OTRS-Extension. Sie läuft im Ticketsystem und im Doku-Archiv und holt sich die Projektdaten, die Copy-Buttons auf der IPSI-Seite ablegt. Darum braucht sie Copy-Buttons ab Version 1.00. Sie meldet sich über einen Keks auf .securewebsystems.net selbst zurück – darum steht ihr Status in dieser Übersicht automatisch.",
+  "requires": "Tampermonkey, Copy-Buttons ab Version 1.00",
+  "match": [
+    "https://tickets.wwwe.systems/*",
+    "https://doku.securewebsystems.net/archive*"
+  ],
+  "download": [
+    "Zammad-Extension.user.js"
+  ],
+  "versions": "_versions",
+  "detect": {
+    "kind": "cookie",
+    "name": "cb_ext_zammad",
+    "probe": "https://doku.securewebsystems.net/archive"
+  },
+  "steps": [
+    {
+      "text": "Unten auf \"Installieren\" klicken – die Datei öffnet sich und Tampermonkey zeigt seine Installations-Seite."
+    },
+    {
+      "text": "Dort die Installation bestätigen. Name und Version liest Tampermonkey selbst aus dem Kopf des Scripts."
+    },
+    {
+      "text": "Falls Tampermonkey nicht anspringt: Datei speichern, in Tampermonkey ein neues Script anlegen und den Inhalt einfügen.",
+      "files": [
+        "Zammad-Extension.user.js"
+      ]
+    },
+    {
+      "text": "Prüfen, dass Copy-Buttons mindestens Version 1.00 ist – sonst fehlen die Projektdaten, die die Extension ausliest."
+    }
+  ]
+}

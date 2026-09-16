@@ -1,0 +1,34 @@
+{
+  "name": "IPSI VSC Helper",
+  "version": "1.3",
+  "kind": "local",
+  "icon": "console",
+  "info": "Lokaler Helfer für den Pfad-Button: Ein Linksklick listet die Ordner im Projekt-Pfad und öffnet den gewählten direkt als neues Fenster in Visual Studio Code. Rechtsklick bietet \"Mit VSC öffnen\" und \"Im Explorer öffnen\". Getrennte Netzlaufwerke weckt er vorher selbst auf. Ersetzt die alte chrome-folder-opener-Extension komplett – keine Chrome-Erweiterung, kein Registry-Eintrag, kein Native-Messaging.",
+  "requires": "Windows, Visual Studio Code",
+  "ping": "http://127.0.0.1:48620/ping",
+  "pingField": "version",
+  "download": ["install.cmd", "folder-helper.js", "uninstall.cmd", "README.md"],
+  "steps": [
+    {
+      "text": "install.cmd und folder-helper.js in denselben Ordner herunterladen.",
+      "files": ["install.cmd", "folder-helper.js"]
+    },
+    {
+      "text": "install.cmd doppelklicken. Sie beendet eine eventuell laufende ältere Instanz, kopiert den Helfer nach %LOCALAPPDATA%\\ipsi-vsc-helper, legt einen unsichtbaren Autostart an und startet ihn sofort."
+    },
+    {
+      "text": "Test: die Ping-Route öffnen – es sollte JSON mit der Version erscheinen.",
+      "link": "http://127.0.0.1:48620/ping"
+    },
+    {
+      "text": "Im Copy-Buttons-Settings-Panel den Schalter \"VSC-Ordner-Öffner\" einschalten."
+    },
+    {
+      "text": "Beim allerersten Klick fragt Chrome einmalig nach Zugriff auf \"Geräte im lokalen Netzwerk\" – zulassen, das ist die Verbindung zum Helfer."
+    },
+    {
+      "text": "Wieder loswerden: uninstall.cmd laden und doppelklicken.",
+      "files": ["uninstall.cmd"]
+    }
+  ]
+}

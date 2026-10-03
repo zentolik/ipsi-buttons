@@ -5,7 +5,7 @@
  * Läuft im Aufgabenbereich (taskpane.html), in commands.html (Outlook im Web / neues Outlook)
  * und als reine JS-Datei im klassischen Outlook für Windows (Ereignisse).
  */
-var CB_ADDIN_VERSION = '1.1';
+var CB_ADDIN_VERSION = '1.2';
 var CB_DB = 'https://pbxaezsviymladoptcep.supabase.co/rest/v1/rpc/';
 // Der Datenbank-Schlüssel kommt beim Koppeln aus den Copy-Buttons (Kopplungs-Code) und
 // liegt danach in den Roaming-Einstellungen des Add-ins - hier steht absichtlich keiner.
@@ -61,7 +61,7 @@ function cbAddr(list) {
 function cbIsBg(addrs) { return addrs.some(function (a) { return a.indexOf(CB_BG_DOMAIN) > -1; }); }
 
 // ── Formatieren: Klartext der Copy-Buttons-Vorlage -> HTML mit Rot/Fett ──
-var CB_LABELS = ['Backup Domain', 'Backup Time', 'Target Domain', 'Customer ID', 'Domain', 'DFS', 'Project', 'Shop folder'];
+var CB_LABELS = ['Backup Domain', 'Backup Time', 'Target Domain', 'Customer ID', 'Domain', 'DFS', 'Project (IPSI)', 'Project', 'Shop folder'];
 function cbEsc(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
@@ -255,6 +255,7 @@ function cbResult(texts, p, subject) {
         }
         r.orig = cbTidy(o.join('\n'));
         if (m) r.origAt = cbZoned(+m[3], +m[1], +m[2], +m[4], +m[5], 'Europe/Sofia');
+        r.origLines = [start, j, !!m]; // für das HTML der zitierten Mail
     }
     return r;
 }
@@ -296,8 +297,8 @@ function cbTrimEdges(el) {
         while (n) {
             var next = side === 'firstChild' ? n.nextSibling : n.previousSibling;
             var tag = n.nodeType === 1 ? n.tagName.toUpperCase() : '';
-            var blank = n.nodeType === 3 ? !n.data.replace(/[\s ]+/g, '')
-                : n.nodeType !== 1 || tag === 'BR' || tag === 'HR' || CB_SKIP.test(tag) || !n.textContent.replace(/[\s ]+/g, '');
+            var blank = n.nodeType === 3 ? !n.data.replace(/[\s\u00a0]+/g, '')
+                : n.nodeType !== 1 || tag === 'BR' || tag === 'HR' || CB_SKIP.test(tag) || !n.textContent.replace(/[\s\u00a0]+/g, '');
             if (blank) { n.parentNode.removeChild(n); n = next; continue; }
             if (n.nodeType === 1) cbTrimEdges(n);
             break;
@@ -309,7 +310,8 @@ function cbChatHtml(root) {
     var walk = function (el, pre, f) { // f: schon aktive Formatierung (nichts doppelt verschachteln)
         for (var n = el.firstChild; n; n = n.nextSibling) {
             if (n.nodeType === 3) {
-                out += pre ? cbEsc(n.data).replace(/\n/g, '<br>') : cbEsc(n.data.replace(/[\s\u00a0]+/g, ' '));
+                // nur ein geschütztes Leerzeichen: in Outlook eine Leerzeile - bleibt als &nbsp; erhalten
+                out += pre ? cbEsc(n.data).replace(/\n/g, '<br>') : /^[ \u00a0]*\u00a0[ \u00a0]*$/.test(n.data) ? '&nbsp;' : cbEsc(n.data.replace(/[\s\u00a0]+/g, ' '));
                 continue;
             }
             if (n.nodeType !== 1) continue;
@@ -353,7 +355,8 @@ function cbChatHtml(root) {
     var empty = '(?:\\s|&nbsp;|<br>|<div>(?:\\s|&nbsp;|<br>)*<\\/div>)';
     out = out.replace(new RegExp('^' + empty + '+'), '').replace(new RegExp(empty + '+$'), '')
         .replace(/(<div>(?:\s|&nbsp;|<br>)*<\/div>\s*){2,}/g, '<div><br></div>').replace(/(<br>\s*){3,}/g, '<br><br>')
-        .replace(/(<\/(ul|ol)>)\s*<div>(?:\s|&nbsp;|<br>)*<\/div>/g, '$1'); // Listen haben schon Abstand
+        .replace(/(<\/(ul|ol)>)\s*<div>(?:\s|&nbsp;|<br>)*<\/div>/g, '$1') // Listen haben schon Abstand
+        .replace(/<div>(?:\s|&nbsp;)+<\/div>/g, '<div><br></div>');
     return out.length > 150000 ? '' : out;
 }
 // äußere Hüllen ohne Bedeutung weg (<div><div>…</div></div>, OTRS setzt die ganze Antwort kursiv)
@@ -375,6 +378,27 @@ function cbParseHtml(html, subject) {
     var texts = lines.map(function (l) { return l.text; });
     var p = cbParse(texts);
     var r = cbResult(texts, p, subject);
+    // zitierte eigene Mail mit Formatierung (Rot, Fett …) - zweite Kopie, daraus nur das Zitat
+    if (r.orig && r.origLines) {
+        try {
+            var doc2 = new DOMParser().parseFromString(String(html || ''), 'text/html'), root2 = doc2.body, lines2 = cbLinesOf(root2), rg = doc2.createRange();
+            var os = r.origLines[0], oe = r.origLines[1];
+            if (oe < lines2.length && root2.lastChild) {
+                var le = lines2[oe];
+                if (le.off !== null && le.node.nodeType === 3) rg.setStart(le.node, le.off); else rg.setStartBefore(le.node);
+                rg.setEndAfter(root2.lastChild);
+                rg.deleteContents();
+            }
+            var ls = lines2[os];
+            rg.setStartBefore(root2.firstChild);
+            var k = r.origLines[2] && ls.node.nodeType === 3 ? ls.node.data.indexOf('wrote:', ls.off || 0) : -1;
+            if (k > -1) rg.setEnd(ls.node, k + 6); else rg.setEndAfter(ls.node);
+            rg.deleteContents();
+            cbTrimEdges(root2);
+            r.origHtml = cbUnwrap(cbChatHtml(root2));
+        } catch (e) { r.origHtml = ''; }
+    }
+    delete r.origLines;
     if (r.kind === 'locked') return r;
     var rng = doc.createRange();
     var at = function (l, end) {
@@ -396,7 +420,9 @@ function cbParseHtml(html, subject) {
 }
 function cbParseText(text, subject) {
     var texts = String(text || '').replace(/\r\n?/g, '\n').split('\n').map(function (t) { return t.replace(/[\s\u00a0]+/g, ' ').trim(); });
-    return cbResult(texts, cbParse(texts), subject);
+    var r = cbResult(texts, cbParse(texts), subject);
+    delete r.origLines;
+    return r;
 }
 function cbBodyHtml(item) { return cbGet(function (cb) { item.body.getAsync(Office.CoercionType.Html, cb); }); }
 // Inhalt einer Mail - aus dem HTML (mit Zeilenumbrüchen und Formatierung), sonst aus dem reinen Text
@@ -410,7 +436,7 @@ function cbMailParts(item, subject) {
 }
 function cbLogArgs(parts) {
     return { p_bgno: parts.bgno || null, p_kind: parts.kind, p_agent: parts.agent || null, p_text: parts.text || null, p_html: parts.html || null,
-        p_orig: parts.orig || null, p_orig_at: parts.origAt || null };
+        p_orig: parts.orig || null, p_orig_at: parts.origAt || null, p_orig_html: parts.origHtml || null };
 }
 
 // ── Mail ablegen ──

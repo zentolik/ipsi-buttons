@@ -5,8 +5,65 @@
     var msg = function (id, text, tone) { var el = $(id); el.textContent = text || ''; el.className = 'status' + (tone ? ' ' + tone : ''); };
     var auto = {}; // schon übernommene Mails in dieser Sitzung
 
+    // ── mehrere markierte Mails auf einmal übernehmen (Mailbox 1.15: getSelectedItemsAsync + loadItemByIdAsync) ──
+    var sel = [], busy = false;
+    var canMulti = function () {
+        try { return Office.context.requirements.isSetSupported('Mailbox', '1.15') && typeof Office.context.mailbox.getSelectedItemsAsync === 'function'; }
+        catch (e) { return false; }
+    };
+    var paintMulti = function () {
+        if (!canMulti()) { show('multi', false); return; }
+        Office.context.mailbox.getSelectedItemsAsync(function (r) {
+            var items = r.status === Office.AsyncResultStatus.Succeeded ? (r.value || []) : [];
+            if (!busy) sel = items.filter(function (x) { return String(x.itemType).toLowerCase() === 'message'; });
+            show('multi', busy || sel.length > 1);
+            if (!busy) {
+                $('multimeta').textContent = sel.length + ' Mails markiert';
+                $('multibtn').disabled = !cbTok();
+                if (!cbTok()) msg('multimsg', 'Erst mit den Copy-Buttons koppeln.', 'muted');
+            }
+        });
+    };
+    var importAll = function () {
+        if (busy || !sel.length) return;
+        busy = true;
+        var list = sel.slice(), total = list.length, done = 0, stored = 0, dup = 0, skipped = 0, failed = 0, tickets = {};
+        $('multibtn').disabled = true;
+        show('multibar', true);
+        var step = function () {
+            $('multifill').style.width = Math.round(done / total * 100) + '%';
+            msg('multimsg', done + ' von ' + total + ' …');
+        };
+        var finish = function () {
+            busy = false;
+            $('multibtn').disabled = false;
+            var n = Object.keys(tickets).length;
+            msg('multimsg', stored + ' neu übernommen' + (dup ? ', ' + dup + ' schon da' : '') + (skipped ? ', ' + skipped + ' keine BG-Mail' : '')
+                + (failed ? ', ' + failed + ' fehlgeschlagen' : '') + ' · ' + n + (n === 1 ? ' BG-Ticket' : ' BG-Tickets') + '.', failed ? 'bad' : 'ok');
+        };
+        var next = function () {
+            step();
+            if (!list.length) { finish(); return; }
+            var it = list.shift();
+            Office.context.mailbox.loadItemByIdAsync(it.itemId, function (r) {
+                if (r.status !== Office.AsyncResultStatus.Succeeded || !r.value) { failed++; done++; next(); return; }
+                var item = r.value;
+                cbLogRead(item).then(function (res) {
+                    if (res && res.skipped) skipped++;
+                    else if (res) { if (res.stored) stored++; else dup++; if (res.ticket) tickets[res.ticket] = 1; }
+                }, function (e) { failed++; if (/nicht gekoppelt|Zu viele/i.test((e && e.message) || '')) list = []; })
+                  .then(function () {
+                      done++;
+                      try { item.unloadAsync(function () { next(); }); } catch (e) { next(); }
+                  });
+            });
+        };
+        next();
+    };
+
     var paintItem = function () {
         var item = Office.context.mailbox.item;
+        if (!item) { show('compose', false); show('read', false); return; }
         var linked = !!cbTok();
         show('compose', !!item && item.itemType === Office.MailboxEnums.ItemType.Message && typeof item.body.setAsync === 'function');
         var isRead = !!item && typeof item.body.setAsync !== 'function';
@@ -85,8 +142,11 @@
             });
         });
         $('logbtn').addEventListener('click', function () { doLog(false); });
-        try { Office.context.mailbox.addHandlerAsync(Office.EventType.ItemChanged, function () { paintItem(); }); } catch (e) {}
+        try { Office.context.mailbox.addHandlerAsync(Office.EventType.ItemChanged, function () { paintItem(); paintMulti(); }); } catch (e) {}
+        try { if (Office.EventType.SelectedItemsChanged) Office.context.mailbox.addHandlerAsync(Office.EventType.SelectedItemsChanged, function () { paintMulti(); }); } catch (e) {}
+        $('multibtn').addEventListener('click', importAll);
         paintLink();
         paintItem();
+        paintMulti();
     });
 })();

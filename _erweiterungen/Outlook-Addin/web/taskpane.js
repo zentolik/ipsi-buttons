@@ -56,7 +56,14 @@
             // Kopplungs-Code aus den Copy-Buttons: "CB1." + Code und Datenbank-Schlüssel
             var pack = null;
             try { if (raw.indexOf('CB1.') === 0) pack = JSON.parse(atob(raw.slice(4))); } catch (e) { pack = null; }
-            if (!pack || !pack.c || !pack.k) { msg('pairmsg', 'Bitte den Code in den Copy-Buttons per Klick kopieren und hier einfügen (nicht abtippen).', 'bad'); return; }
+            if (!pack || !pack.c || !pack.k) {
+                // nur der kurze Code (abgetippt oder aus einer älteren Copy-Buttons-Version kopiert)
+                var short = /^[A-Z0-9]{4}-?[A-Z0-9]{4}$/i.test(raw);
+                msg('pairmsg', short
+                    ? 'Das ist nur der kurze Code – dem Add-in fehlt damit der Schlüssel. Bitte die Copy-Buttons auf die aktuelle Version bringen (ab 1.0767), einen neuen Code erzeugen, darauf klicken (kopiert ihn) und hier einfügen.'
+                    : 'Bitte den Code in den Copy-Buttons per Klick kopieren und hier einfügen (nicht abtippen).', 'bad');
+                return;
+            }
             $('pairbtn').disabled = true;
             msg('pairmsg', 'Wird gekoppelt …');
             var mbx = '';

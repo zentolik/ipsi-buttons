@@ -1,6 +1,6 @@
 {
   "name": "Outlook Add-in",
-  "version": "1.0",
+  "version": "1.1",
   "kind": "outlook",
   "icon": "send",
   "info": "Verbindet Outlook (neu, im Browser und klassisch) mit den Copy-Buttons: Die BG-Vorlage aus dem Support-Fenster wird in Outlook automatisch mit Rot und Fettschrift formatiert, Mails an support@viscomp.bg landen beim Senden als BG-Ticket in den Copy-Buttons, und Antworten von BG werden beim Öffnen übernommen (Aufgabenbereich anheften) – zu sehen im Support-Fenster unter Viscomp (BG) → Meine Tickets. Gespeichert werden Betreff, Absender, Datum und Mailtext (ohne Anhänge). Der Status hier erscheint automatisch, sobald das Add-in gekoppelt ist.",

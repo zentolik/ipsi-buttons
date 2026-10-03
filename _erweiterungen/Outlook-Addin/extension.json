@@ -1,0 +1,40 @@
+{
+  "name": "Outlook Add-in",
+  "version": "1.0",
+  "kind": "outlook",
+  "icon": "send",
+  "info": "Verbindet Outlook (neu, im Browser und klassisch) mit den Copy-Buttons: Die BG-Vorlage aus dem Support-Fenster wird in Outlook automatisch mit Rot und Fettschrift formatiert, Mails an support@viscomp.bg landen beim Senden als BG-Ticket in den Copy-Buttons, und Antworten von BG werden beim Öffnen übernommen (Aufgabenbereich anheften) – zu sehen im Support-Fenster unter Viscomp (BG) → Meine Tickets. Gespeichert werden Betreff, Absender, Datum und Mailtext (ohne Anhänge). Der Status hier erscheint automatisch, sobald das Add-in gekoppelt ist.",
+  "requires": "Outlook mit Microsoft 365 (neu, Web oder klassisch), Copy-Buttons ab Version 1.0767",
+  "match": [
+    "Outlook – Mailfenster und gelesene Mails"
+  ],
+  "download": [
+    "manifest.xml"
+  ],
+  "detect": {
+    "kind": "global",
+    "name": "cb_ext_outlook"
+  },
+  "steps": [
+    {
+      "text": "manifest.xml herunterladen.",
+      "files": ["manifest.xml"]
+    },
+    {
+      "text": "Outlook im Browser öffnen (outlook.office.com) und im selben Browser aka.ms/olksideload aufrufen – es öffnet sich \"Add-Ins für Outlook\".",
+      "link": "https://aka.ms/olksideload"
+    },
+    {
+      "text": "Links \"Meine Add-Ins\" wählen, ganz nach unten zu \"Benutzerdefinierte Add-Ins\" scrollen, \"+ Benutzerdefiniertes Add-In hinzufügen\" → \"Aus Datei hinzufügen…\" → manifest.xml wählen und bestätigen. Danach ist das Add-in auch im neuen Outlook-Programm da (eventuell Outlook einmal neu starten)."
+    },
+    {
+      "text": "Koppeln: In den Copy-Buttons das Support-Fenster öffnen, oben rechts \"Viscomp (BG)\" wählen, Reiter \"Meine Tickets\" → \"Outlook koppeln\" und auf den Code klicken (das kopiert ihn). In Outlook eine Mail öffnen, auf \"Copy-Buttons\" klicken und den Code dort einfügen."
+    },
+    {
+      "text": "Antworten von BG automatisch übernehmen: In Outlook bei einer Mail \"Copy-Buttons\" öffnen und den Aufgabenbereich mit der Stecknadel anheften – jede geöffnete BG-Mail landet dann im passenden BG-Ticket."
+    },
+    {
+      "text": "Fertig: \"E-Mail öffnen\" im Support-Fenster öffnet die Mail, das Add-in setzt die Vorlage mit allen Formatierungen ein – auch selbst bearbeitete (sonst Knopf \"BG formatieren\" im Mailfenster), beim Senden entsteht das BG-Ticket."
+    }
+  ]
+}

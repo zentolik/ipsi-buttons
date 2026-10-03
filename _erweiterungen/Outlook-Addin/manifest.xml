@@ -1,0 +1,160 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OfficeApp xmlns="http://schemas.microsoft.com/office/appforoffice/1.1"
+           xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+           xmlns:bt="http://schemas.microsoft.com/office/officeappbasictypes/1.0"
+           xmlns:mailappor="http://schemas.microsoft.com/office/mailappversionoverrides/1.0"
+           xsi:type="MailApp">
+  <Id>372f06d2-ee79-472c-a1fe-f154ccc75c9c</Id>
+  <Version>1.0.0.0</Version>
+  <ProviderName>Kaan Korkmaz</ProviderName>
+  <DefaultLocale>de-DE</DefaultLocale>
+  <DisplayName DefaultValue="Copy-Buttons"/>
+  <Description DefaultValue="Viscomp-(BG-)Mails mit den Copy-Buttons verbinden: Vorlage formatieren, gesendete Mails und Antworten als BG-Tickets ablegen."/>
+  <IconUrl DefaultValue="https://zentolik.github.io/ipsi-buttons/_erweiterungen/Outlook-Addin/web/img/icon-64.png"/>
+  <HighResolutionIconUrl DefaultValue="https://zentolik.github.io/ipsi-buttons/_erweiterungen/Outlook-Addin/web/img/icon-128.png"/>
+  <SupportUrl DefaultValue="https://github.com/zentolik/ipsi-buttons"/>
+  <AppDomains>
+    <AppDomain>https://zentolik.github.io</AppDomain>
+    <AppDomain>https://pbxaezsviymladoptcep.supabase.co</AppDomain>
+  </AppDomains>
+  <Hosts>
+    <Host Name="Mailbox"/>
+  </Hosts>
+  <Requirements>
+    <Sets>
+      <Set Name="Mailbox" MinVersion="1.1"/>
+    </Sets>
+  </Requirements>
+  <FormSettings>
+    <Form xsi:type="ItemRead">
+      <DesktopSettings>
+        <SourceLocation DefaultValue="https://zentolik.github.io/ipsi-buttons/_erweiterungen/Outlook-Addin/web/taskpane.html"/>
+        <RequestedHeight>250</RequestedHeight>
+      </DesktopSettings>
+    </Form>
+  </FormSettings>
+  <Permissions>ReadWriteItem</Permissions>
+  <Rule xsi:type="RuleCollection" Mode="Or">
+    <Rule xsi:type="ItemIs" ItemType="Message" FormType="Read"/>
+    <Rule xsi:type="ItemIs" ItemType="Message" FormType="Edit"/>
+  </Rule>
+  <DisableEntityHighlighting>false</DisableEntityHighlighting>
+
+  <VersionOverrides xmlns="http://schemas.microsoft.com/office/mailappversionoverrides" xsi:type="VersionOverridesV1_0">
+    <VersionOverrides xmlns="http://schemas.microsoft.com/office/mailappversionoverrides/1.1" xsi:type="VersionOverridesV1_1">
+      <Requirements>
+        <bt:Sets DefaultMinVersion="1.3">
+          <bt:Set Name="Mailbox"/>
+        </bt:Sets>
+      </Requirements>
+      <Hosts>
+        <Host xsi:type="MailHost">
+          <Runtimes>
+            <!-- Outlook im Web / neues Outlook: HTML-Seite; klassisches Outlook (Windows): nur die JS-Datei -->
+            <Runtime resid="Commands.Url">
+              <Override type="javascript" resid="CommandsJs.Url"/>
+            </Runtime>
+          </Runtimes>
+          <DesktopFormFactor>
+            <FunctionFile resid="Commands.Url"/>
+
+            <!-- gelesene Mail: Aufgabenbereich -->
+            <ExtensionPoint xsi:type="MessageReadCommandSurface">
+              <OfficeTab id="TabDefault">
+                <Group id="cbReadGroup">
+                  <Label resid="Group.Label"/>
+                  <Control xsi:type="Button" id="cbReadPane">
+                    <Label resid="Pane.Label"/>
+                    <Supertip>
+                      <Title resid="Pane.Label"/>
+                      <Description resid="PaneRead.Tip"/>
+                    </Supertip>
+                    <Icon>
+                      <bt:Image size="16" resid="Icon.16x16"/>
+                      <bt:Image size="32" resid="Icon.32x32"/>
+                      <bt:Image size="80" resid="Icon.80x80"/>
+                    </Icon>
+                    <Action xsi:type="ShowTaskpane">
+                      <SourceLocation resid="Taskpane.Url"/>
+                      <SupportsPinning>true</SupportsPinning>
+                    </Action>
+                  </Control>
+                </Group>
+              </OfficeTab>
+            </ExtensionPoint>
+
+            <!-- neue Mail: formatieren + Aufgabenbereich -->
+            <ExtensionPoint xsi:type="MessageComposeCommandSurface">
+              <OfficeTab id="TabDefault">
+                <Group id="cbComposeGroup">
+                  <Label resid="Group.Label"/>
+                  <Control xsi:type="Button" id="cbFormat">
+                    <Label resid="Format.Label"/>
+                    <Supertip>
+                      <Title resid="Format.Label"/>
+                      <Description resid="Format.Tip"/>
+                    </Supertip>
+                    <Icon>
+                      <bt:Image size="16" resid="Icon.16x16"/>
+                      <bt:Image size="32" resid="Icon.32x32"/>
+                      <bt:Image size="80" resid="Icon.80x80"/>
+                    </Icon>
+                    <Action xsi:type="ExecuteFunction">
+                      <FunctionName>cbFormatCommand</FunctionName>
+                    </Action>
+                  </Control>
+                  <Control xsi:type="Button" id="cbComposePane">
+                    <Label resid="Pane.Label"/>
+                    <Supertip>
+                      <Title resid="Pane.Label"/>
+                      <Description resid="PaneCompose.Tip"/>
+                    </Supertip>
+                    <Icon>
+                      <bt:Image size="16" resid="Icon.16x16"/>
+                      <bt:Image size="32" resid="Icon.32x32"/>
+                      <bt:Image size="80" resid="Icon.80x80"/>
+                    </Icon>
+                    <Action xsi:type="ShowTaskpane">
+                      <SourceLocation resid="Taskpane.Url"/>
+                    </Action>
+                  </Control>
+                </Group>
+              </OfficeTab>
+            </ExtensionPoint>
+
+            <!-- Ereignisse: neue Mail (Vorlage gleich formatieren), Senden (an BG: als BG-Ticket ablegen) -->
+            <ExtensionPoint xsi:type="LaunchEvent">
+              <LaunchEvents>
+                <LaunchEvent Type="OnNewMessageCompose" FunctionName="cbOnNewCompose"/>
+                <LaunchEvent Type="OnMessageSend" FunctionName="cbOnSend" SendMode="SoftBlock"/>
+              </LaunchEvents>
+              <SourceLocation resid="Commands.Url"/>
+            </ExtensionPoint>
+          </DesktopFormFactor>
+        </Host>
+      </Hosts>
+      <Resources>
+        <bt:Images>
+          <bt:Image id="Icon.16x16" DefaultValue="https://zentolik.github.io/ipsi-buttons/_erweiterungen/Outlook-Addin/web/img/icon-16.png"/>
+          <bt:Image id="Icon.32x32" DefaultValue="https://zentolik.github.io/ipsi-buttons/_erweiterungen/Outlook-Addin/web/img/icon-32.png"/>
+          <bt:Image id="Icon.80x80" DefaultValue="https://zentolik.github.io/ipsi-buttons/_erweiterungen/Outlook-Addin/web/img/icon-80.png"/>
+        </bt:Images>
+        <bt:Urls>
+          <bt:Url id="Commands.Url" DefaultValue="https://zentolik.github.io/ipsi-buttons/_erweiterungen/Outlook-Addin/web/commands.html"/>
+          <bt:Url id="CommandsJs.Url" DefaultValue="https://zentolik.github.io/ipsi-buttons/_erweiterungen/Outlook-Addin/web/commands.js"/>
+          <bt:Url id="Taskpane.Url" DefaultValue="https://zentolik.github.io/ipsi-buttons/_erweiterungen/Outlook-Addin/web/taskpane.html"/>
+        </bt:Urls>
+        <bt:ShortStrings>
+          <bt:String id="Group.Label" DefaultValue="Copy-Buttons"/>
+          <bt:String id="Pane.Label" DefaultValue="Copy-Buttons"/>
+          <bt:String id="Format.Label" DefaultValue="BG formatieren"/>
+        </bt:ShortStrings>
+        <bt:LongStrings>
+          <bt:String id="PaneRead.Tip" DefaultValue="BG-Mail in den Copy-Buttons ablegen, Kopplung verwalten."/>
+          <bt:String id="PaneCompose.Tip" DefaultValue="Copy-Buttons-Bereich: Vorlage formatieren, Kopplung verwalten."/>
+          <bt:String id="Format.Tip" DefaultValue="Setzt die BG-Vorlage aus den Copy-Buttons mit Rot und Fettschrift ein."/>
+        </bt:LongStrings>
+      </Resources>
+    </VersionOverrides>
+  </VersionOverrides>
+</OfficeApp>

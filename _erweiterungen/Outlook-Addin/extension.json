@@ -1,6 +1,6 @@
 {
   "name": "Outlook Add-in",
-  "version": "1.1",
+  "version": "1.2",
   "kind": "outlook",
   "icon": "send",
   "info": "Verbindet Outlook (neu, im Browser und klassisch) mit den Copy-Buttons: Die BG-Vorlage aus dem Support-Fenster wird in Outlook automatisch mit Rot und Fettschrift formatiert, Mails an support@viscomp.bg landen beim Senden als BG-Ticket in den Copy-Buttons, und Antworten von BG werden beim Öffnen übernommen (Aufgabenbereich anheften) – zu sehen im Support-Fenster unter Viscomp (BG) → Meine Tickets. Gespeichert werden Betreff, Absender, Datum und Mailtext (ohne Anhänge). Der Status hier erscheint automatisch, sobald das Add-in gekoppelt ist.",
@@ -18,7 +18,9 @@
   "steps": [
     {
       "text": "manifest.xml herunterladen.",
-      "files": ["manifest.xml"]
+      "files": [
+        "manifest.xml"
+      ]
     },
     {
       "text": "Outlook im Browser öffnen (outlook.office.com) und im selben Browser aka.ms/olksideload aufrufen – es öffnet sich \"Add-Ins für Outlook\".",
@@ -32,6 +34,9 @@
     },
     {
       "text": "Antworten von BG automatisch übernehmen: In Outlook bei einer Mail \"Copy-Buttons\" öffnen und den Aufgabenbereich mit der Stecknadel anheften – jede geöffnete BG-Mail landet dann im passenden BG-Ticket."
+    },
+    {
+      "text": "Ältere BG-Mails nachholen: Im Ordner mit den BG-Mails alle markieren (Strg+A, höchstens 100 auf einmal) – im angehefteten Copy-Buttons-Bereich erscheint \"Alle markierten an Copy-Buttons übernehmen\". Gesendete Mails, die BG zitiert, werden dabei mit ergänzt."
     },
     {
       "text": "Fertig: \"E-Mail öffnen\" im Support-Fenster öffnet die Mail, das Add-in setzt die Vorlage mit allen Formatierungen ein – auch selbst bearbeitete (sonst Knopf \"BG formatieren\" im Mailfenster), beim Senden entsteht das BG-Ticket."

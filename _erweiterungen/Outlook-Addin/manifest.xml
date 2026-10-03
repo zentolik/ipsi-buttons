@@ -5,7 +5,7 @@
            xmlns:mailappor="http://schemas.microsoft.com/office/mailappversionoverrides/1.0"
            xsi:type="MailApp">
   <Id>372f06d2-ee79-472c-a1fe-f154ccc75c9c</Id>
-  <Version>1.0.0.0</Version>
+  <Version>1.0.1.0</Version>
   <ProviderName>Kaan Korkmaz</ProviderName>
   <DefaultLocale>de-DE</DefaultLocale>
   <DisplayName DefaultValue="Copy-Buttons"/>
@@ -77,6 +77,7 @@
                     <Action xsi:type="ShowTaskpane">
                       <SourceLocation resid="Taskpane.Url"/>
                       <SupportsPinning>true</SupportsPinning>
+                      <SupportsMultiSelect>true</SupportsMultiSelect>
                     </Action>
                   </Control>
                 </Group>

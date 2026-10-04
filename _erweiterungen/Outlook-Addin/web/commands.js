@@ -5,7 +5,7 @@
  * Läuft im Aufgabenbereich (taskpane.html), in commands.html (Outlook im Web / neues Outlook)
  * und als reine JS-Datei im klassischen Outlook für Windows (Ereignisse).
  */
-var CB_ADDIN_VERSION = '1.3';
+var CB_ADDIN_VERSION = '1.4';
 var CB_DB = 'https://pbxaezsviymladoptcep.supabase.co/rest/v1/rpc/';
 // Der Datenbank-Schlüssel kommt beim Koppeln aus den Copy-Buttons (Kopplungs-Code) und
 // liegt danach in den Roaming-Einstellungen des Add-ins - hier steht absichtlich keiner.
@@ -257,6 +257,19 @@ function cbResult(texts, p, subject) {
         if (m) r.origAt = cbZoned(+m[3], +m[1], +m[2], +m[4], +m[5], 'Europe/Sofia');
         r.origLines = [start, j, !!m]; // für das HTML der zitierten Mail
     }
+    // eigene Antwort an BG zitiert deren Mail (Outlook: "Von: Viscomp Support … Gesendet: … Betreff: …") - fehlt sie im Ticket, wird sie daraus ergänzt
+    if (p.quote > -1 && /^(Von|From):/i.test(texts[p.quote]) && /viscomp\.bg|Viscomp/i.test(texts[p.quote])) {
+        var q = p.quote, sent = '';
+        while (q < texts.length && (/^(Von|From|Gesendet|Sent|Datum|Date|An|To|Bis|Cc|Betreff|Subject|Wichtigkeit|Importance):/i.test(texts[q]) || (!texts[q] && q === p.quote))) {
+            var hm = /^(Gesendet|Sent|Datum|Date):\s*(.*)$/i.exec(texts[q]);
+            if (hm) sent = hm[2];
+            q++;
+        }
+        var qs = q;
+        for (var qe = qs; qe < texts.length; qe++) if (cbIsQuote(texts, qe) || cbIsSig(texts, qe)) break;
+        var qt = cbTidy(texts.slice(qs, qe).join('\n'));
+        if (qt) { r.qin = qt; r.qinAt = cbSentAt(sent); r.qinLines = [qs, qe]; }
+    }
     return r;
 }
 // Farben als Namen wie im Chat-Editor (Grau/Schwarz/Weiß fallen weg - die passt der Dunkelmodus an)
@@ -380,6 +393,43 @@ function cbUnwrap(html) {
     }
     return b.innerHTML.trim();
 }
+// Zeilen s … e-1 einer Mail als Chat-HTML (after: erst hinter diesem Text in Zeile s beginnen)
+function cbSliceHtml(html, s, e, after) {
+    try {
+        var doc = new DOMParser().parseFromString(String(html || ''), 'text/html'), root = doc.body, L = cbLinesOf(root), rg = doc.createRange();
+        if (s >= L.length || !root.firstChild) return '';
+        if (e < L.length) {
+            var le = L[e];
+            if (le.off !== null && le.node.nodeType === 3) rg.setStart(le.node, le.off); else rg.setStartBefore(le.node);
+            rg.setEndAfter(root.lastChild);
+            rg.deleteContents();
+        }
+        var ls = L[s];
+        rg.setStartBefore(root.firstChild);
+        if (after) {
+            var k = ls.node.nodeType === 3 ? ls.node.data.indexOf(after, ls.off || 0) : -1;
+            if (k > -1) rg.setEnd(ls.node, k + after.length); else rg.setEndAfter(ls.node);
+        } else if (ls.off !== null && ls.node.nodeType === 3) rg.setEnd(ls.node, ls.off);
+        else rg.setEndBefore(ls.node);
+        rg.deleteContents();
+        cbTrimEdges(root);
+        return cbUnwrap(cbChatHtml(root));
+    } catch (x) { return ''; }
+}
+// "Montag, 16. Februar 2026 17:03" / "Monday, February 16, 2026 5:03 PM" (Ortszeit) -> ISO
+var CB_MONTHS = { januar: 1, january: 1, jan: 1, februar: 2, february: 2, feb: 2, 'märz': 3, march: 3, mar: 3, april: 4, apr: 4, mai: 5, may: 5, juni: 6, june: 6, jun: 6,
+    juli: 7, july: 7, jul: 7, august: 8, aug: 8, september: 9, sep: 9, oktober: 10, october: 10, okt: 10, oct: 10, november: 11, nov: 11, dezember: 12, december: 12, dez: 12, dec: 12 };
+function cbSentAt(v) {
+    var t = String(v || ''), m, y, mo, d, h, mi;
+    if ((m = /(\d{1,2})\.\s*([A-Za-zäÄ]+)\s+(\d{4})\s+(\d{1,2}):(\d{2})/.exec(t))) { d = +m[1]; mo = CB_MONTHS[m[2].toLowerCase()]; y = +m[3]; h = +m[4]; mi = +m[5]; }
+    else if ((m = /([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})\s+(\d{1,2}):(\d{2})\s*(AM|PM)?/i.exec(t))) {
+        mo = CB_MONTHS[m[1].toLowerCase()]; d = +m[2]; y = +m[3]; h = +m[4] % 12 + (/pm/i.test(m[6] || '') ? 12 : (m[6] ? 0 : +m[4] - +m[4] % 12)); mi = +m[5];
+    } else if ((m = /(\d{1,2})\.(\d{1,2})\.(\d{4})\s+(\d{1,2}):(\d{2})/.exec(t))) { d = +m[1]; mo = +m[2]; y = +m[3]; h = +m[4]; mi = +m[5]; }
+    if (!mo) return null;
+    var tz = 'Europe/Berlin';
+    try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || tz; } catch (x) {}
+    return cbZoned(y, mo, d, h, mi, tz);
+}
 // ganze Mail (HTML) -> { bgno, kind, agent, text, body, html, orig, origAt }
 function cbParseHtml(html, subject) {
     var doc = new DOMParser().parseFromString(String(html || ''), 'text/html');
@@ -388,27 +438,10 @@ function cbParseHtml(html, subject) {
     var texts = lines.map(function (l) { return l.text; });
     var p = cbParse(texts);
     var r = cbResult(texts, p, subject);
-    // zitierte eigene Mail mit Formatierung (Rot, Fett …) - zweite Kopie, daraus nur das Zitat
-    if (r.orig && r.origLines) {
-        try {
-            var doc2 = new DOMParser().parseFromString(String(html || ''), 'text/html'), root2 = doc2.body, lines2 = cbLinesOf(root2), rg = doc2.createRange();
-            var os = r.origLines[0], oe = r.origLines[1];
-            if (oe < lines2.length && root2.lastChild) {
-                var le = lines2[oe];
-                if (le.off !== null && le.node.nodeType === 3) rg.setStart(le.node, le.off); else rg.setStartBefore(le.node);
-                rg.setEndAfter(root2.lastChild);
-                rg.deleteContents();
-            }
-            var ls = lines2[os];
-            rg.setStartBefore(root2.firstChild);
-            var k = r.origLines[2] && ls.node.nodeType === 3 ? ls.node.data.indexOf('wrote:', ls.off || 0) : -1;
-            if (k > -1) rg.setEnd(ls.node, k + 6); else rg.setEndAfter(ls.node);
-            rg.deleteContents();
-            cbTrimEdges(root2);
-            r.origHtml = cbUnwrap(cbChatHtml(root2));
-        } catch (e) { r.origHtml = ''; }
-    }
-    delete r.origLines;
+    // zitierte Mails mit Formatierung (Rot, Fett, Links …) - jeweils aus einer frischen Kopie
+    if (r.orig && r.origLines) r.origHtml = r.origLines[2] ? cbSliceHtml(html, r.origLines[0], r.origLines[1], 'wrote:') : cbSliceHtml(html, r.origLines[0] + 1, r.origLines[1]);
+    if (r.qin && r.qinLines) r.qinHtml = cbSliceHtml(html, r.qinLines[0], r.qinLines[1]);
+    delete r.origLines; delete r.qinLines;
     if (r.kind === 'locked') return r;
     var rng = doc.createRange();
     var at = function (l, end) {
@@ -431,7 +464,7 @@ function cbParseHtml(html, subject) {
 function cbParseText(text, subject) {
     var texts = String(text || '').replace(/\r\n?/g, '\n').split('\n').map(function (t) { return t.replace(/[\s\u00a0]+/g, ' ').trim(); });
     var r = cbResult(texts, cbParse(texts), subject);
-    delete r.origLines;
+    delete r.origLines; delete r.qinLines;
     return r;
 }
 function cbBodyHtml(item) { return cbGet(function (cb) { item.body.getAsync(Office.CoercionType.Html, cb); }); }
@@ -446,7 +479,8 @@ function cbMailParts(item, subject) {
 }
 function cbLogArgs(parts) {
     return { p_bgno: parts.bgno || null, p_kind: parts.kind, p_agent: parts.agent || null, p_text: parts.text || null, p_html: parts.html || null,
-        p_orig: parts.orig || null, p_orig_at: parts.origAt || null, p_orig_html: parts.origHtml || null };
+        p_orig: parts.orig || null, p_orig_at: parts.origAt || null, p_orig_html: parts.origHtml || null,
+        p_qin: parts.qin || null, p_qin_at: parts.qinAt || null, p_qin_html: parts.qinHtml || null, p_qin_agent: parts.qin ? (parts.agent || null) : null };
 }
 
 // ── Mail ablegen ──

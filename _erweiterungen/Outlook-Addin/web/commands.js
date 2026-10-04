@@ -5,7 +5,7 @@
  * Läuft im Aufgabenbereich (taskpane.html), in commands.html (Outlook im Web / neues Outlook)
  * und als reine JS-Datei im klassischen Outlook für Windows (Ereignisse).
  */
-var CB_ADDIN_VERSION = '1.4';
+var CB_ADDIN_VERSION = '1.5';
 var CB_DB = 'https://pbxaezsviymladoptcep.supabase.co/rest/v1/rpc/';
 // Der Datenbank-Schlüssel kommt beim Koppeln aus den Copy-Buttons (Kopplungs-Code) und
 // liegt danach in den Roaming-Einstellungen des Add-ins - hier steht absichtlich keiner.
@@ -94,7 +94,7 @@ function cbSetHtml(item, html) {
         });
     });
 }
-function cbFormatItem(item) {
+function cbFormatItem(item, pendingOnly) {
     var tok = cbTok();
     var pending = !tok ? Promise.resolve(null) : cbGet(function (cb) { item.subject.getAsync(cb); }).then(function (subject) {
         if (!subject) return null;
@@ -102,6 +102,7 @@ function cbFormatItem(item) {
     });
     return pending.then(function (html) {
         if (html) return cbSetHtml(item, '<div style="font-family:Calibri,Arial,sans-serif;font-size:11pt;">' + html + '</div>');
+        if (pendingOnly) return false; // beim Senden nur die bereitgelegte Fassung, nie den Text umbauen (Antworten mit Verlauf)
         return cbBodyText(item).then(function (text) {
             if (!text || !cbLooksLikeTemplate(text)) return false;
             return cbSetHtml(item, cbFormat(text));
@@ -537,20 +538,40 @@ function cbFormatCommand(event) {
 // neues Mailfenster: steht schon eine Copy-Buttons-Vorlage drin (über "E-Mail öffnen"), gleich formatieren
 function cbOnNewCompose(event) {
     var item = Office.context.mailbox.item;
-    setTimeout(function () {
-        cbFormatItem(item).then(function () { event.completed(); }, function () { event.completed(); });
-    }, 600);
+    var tries = 0;
+    // "E-Mail öffnen" (Outlook-Link) füllt Betreff und Text erst nach dem Öffnen ein - bis zu 15 s darauf warten
+    var step = function () {
+        cbGet(function (cb) { item.subject.getAsync(cb); }).then(function (subject) {
+            if (!subject && ++tries < 30) { setTimeout(step, 500); return; }
+            if (!subject) { event.completed(); return; }
+            setTimeout(function () {
+                cbFormatItem(item).then(function () { event.completed(); }, function () { event.completed(); });
+            }, 400);
+        });
+    };
+    setTimeout(step, 300);
 }
-// Senden: Mails an BG in den Copy-Buttons ablegen - das Senden selbst wird nie aufgehalten
+// Text schon formatiert (fett, Farbe)? Dann beim Senden nichts mehr anfassen
+function cbHasFormat(html) {
+    return /<(b|strong)[\s>]|font-weight:\s*(bold|[6-9]00)|color:\s*(#d0021b|rgb\(\s*208,\s*2,\s*27\))/i.test(String(html || ''));
+}
+// Senden: noch unformatierte Vorlage formatieren (falls das beim Öffnen nicht geklappt hat) und
+// Mails an BG in den Copy-Buttons ablegen - das Senden selbst wird nie aufgehalten
 function cbOnSend(event) {
     var item = Office.context.mailbox.item;
     var done = false;
     var finish = function () { if (done) return; done = true; event.completed({ allowEvent: true }); };
-    setTimeout(finish, 4000);
-    cbLogCompose(item).then(finish, finish);
+    setTimeout(finish, 8000);
+    cbBodyHtml(item).then(function (html) {
+        return cbHasFormat(html) ? false : cbFormatItem(item, true).catch(function () { return false; });
+    }).catch(function () { return false; }).then(function () {
+        return cbLogCompose(item);
+    }).then(finish, finish);
 }
 
 // Ereignis- und Knopf-Funktionen anmelden (oben auf Dateiebene, wie Outlook es für Ereignisse verlangt)
+// Outlook im Web / neues Outlook rufen Knopf- und Ereignis-Funktionen erst auf, wenn das Add-in initialisiert ist
+if (typeof Office !== 'undefined' && Office.onReady) Office.onReady(function () {});
 if (typeof Office !== 'undefined' && Office.actions && Office.actions.associate) {
     Office.actions.associate('cbFormatCommand', cbFormatCommand);
     Office.actions.associate('cbOnNewCompose', cbOnNewCompose);

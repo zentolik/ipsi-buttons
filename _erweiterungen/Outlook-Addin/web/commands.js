@@ -5,7 +5,7 @@
  * Läuft im Aufgabenbereich (taskpane.html), in commands.html (Outlook im Web / neues Outlook)
  * und als reine JS-Datei im klassischen Outlook für Windows (Ereignisse).
  */
-var CB_ADDIN_VERSION = '1.2';
+var CB_ADDIN_VERSION = '1.3';
 var CB_DB = 'https://pbxaezsviymladoptcep.supabase.co/rest/v1/rpc/';
 // Der Datenbank-Schlüssel kommt beim Koppeln aus den Copy-Buttons (Kopplungs-Code) und
 // liegt danach in den Roaming-Einstellungen des Add-ins - hier steht absichtlich keiner.
@@ -305,13 +305,23 @@ function cbTrimEdges(el) {
         }
     });
 }
+// nackte Adressen im Text als Link (nicht innerhalb eines Links)
+function cbLinkify(raw, inLink) {
+    var re = /(https?:\/\/[^\s<>"']+[^\s<>"'.,;:!?)\]])/g, out = '', last = 0, m;
+    if (inLink) return cbEsc(raw);
+    while ((m = re.exec(raw))) {
+        out += cbEsc(raw.slice(last, m.index)) + '<a href="' + cbEsc(m[1]) + '">' + cbEsc(m[1]) + '</a>';
+        last = m.index + m[1].length;
+    }
+    return out + cbEsc(raw.slice(last));
+}
 function cbChatHtml(root) {
     var out = '';
     var walk = function (el, pre, f) { // f: schon aktive Formatierung (nichts doppelt verschachteln)
         for (var n = el.firstChild; n; n = n.nextSibling) {
             if (n.nodeType === 3) {
                 // nur ein geschütztes Leerzeichen: in Outlook eine Leerzeile - bleibt als &nbsp; erhalten
-                out += pre ? cbEsc(n.data).replace(/\n/g, '<br>') : /^[ \u00a0]*\u00a0[ \u00a0]*$/.test(n.data) ? '&nbsp;' : cbEsc(n.data.replace(/[\s\u00a0]+/g, ' '));
+                out += pre ? cbLinkify(n.data, f.a).replace(/\n/g, '<br>') : /^[ \u00a0]*\u00a0[ \u00a0]*$/.test(n.data) ? '&nbsp;' : cbLinkify(n.data.replace(/[\s\u00a0]+/g, ' '), f.a);
                 continue;
             }
             if (n.nodeType !== 1) continue;

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Zammad-Extension
 // @namespace    https://github.com/zentolik
-// @version      0.04
+// @version      0.06
 // @description  Erstellt Zammad-Tickets aus IPSI (Migration von OTRS-Extension) - benötigt Copy-Buttons Version 1.00 oder neuer!
 // @author       Zentolik
 // @match        https://tickets.wwwe.systems/*
@@ -114,6 +114,7 @@
     }
     function delay(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
     function escapeHtml(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+    function escapeAttr(s) { return escapeHtml(s).replace(/"/g, '&quot;'); }
 
     /* ===== 4) FIELD SETTERS ===== */
     function switchTab(type) {
@@ -215,7 +216,7 @@
     }
 
     /* ===== 6) GENDER / ANREDE POPUP (kept; MB popup removed) ===== */
-    function askGender(defaultName, hasDemo, isAktu) {
+    function askGender(defaultName, hasDemo, isAktu, isShop, helpLink, isScp) {
     return new Promise(function (resolve) {
         var overlay = document.createElement("div");
         overlay.style.cssText = "position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,0.55);display:flex;align-items:center;justify-content:center;";
@@ -244,7 +245,7 @@
         });
         box.appendChild(row);
 
-        var optState = { qImages:false, scp:false, qr:false };
+        var optState = { qImages:false, qr:false };
         var optWrap = document.createElement("div"); optWrap.style.cssText = "margin-bottom:16px;";
         var lbl2 = document.createElement("div"); lbl2.textContent = "Optionale Bl\u00f6cke (nur Live-Vorlage)"; lbl2.style.cssText = "font-size:12px;color:#a4a4a6;margin:0 0 6px;";
         optWrap.appendChild(lbl2);
@@ -256,31 +257,109 @@
             r.appendChild(cb); r.appendChild(s); return r;
         }
         optWrap.appendChild(optCheck("qImages", "Bildqualit\u00e4ts-Block"));
-        optWrap.appendChild(optCheck("scp", "SocialContentPilot-Block"));
         optWrap.appendChild(optCheck("qr", "QR-Code-Block"));
         if (!isAktu) box.appendChild(optWrap);
+
+        // Social Content Pilot: drei Vorlagen aus dem Working Guide.
+        //   mail = 8.5 "Ihr Social Content Pilot steht fuer Sie bereit!" (eigene Mail)
+        //   live = 3.2 SCP-Block in der Live-Mail (nach ZT)
+        //   demo = 3.5 SCP-Block in der Demo-Mail (nach ZT auf DEMO)
+        // Vor dem Ausfuellen wird gefragt, welche; dazu, ob der optionale Hinweis
+        // (Kanaele nicht verknuepft) hinein soll - dann ist der Helpcenter-Link Pflicht.
+        var scpState = { tpl: "none", hint: false, link: "" };
+        var scpWrap = document.createElement("div"); scpWrap.style.cssText = "margin-bottom:16px;";
+        var lbl3 = document.createElement("div"); lbl3.textContent = "Social Content Pilot (SCP)"; lbl3.style.cssText = "font-size:12px;color:#a4a4a6;margin:0 0 6px;";
+        scpWrap.appendChild(lbl3);
+        var SCP_TPLS = [
+            ["none", "Kein SCP"],
+            ["mail", "SCP steht für Sie bereit (eigene Mail, 8.5)"],
+            ["live", "SCP nach ZT (Block in der Live-Mail, 3.2)"],
+            ["demo", "SCP nach ZT auf DEMO (Block in der Demo-Mail, 3.5)"]
+        ].filter(function (t) { return !(isAktu && (t[0] === "live" || t[0] === "demo")) && !(t[0] === "demo" && !hasDemo); });
+        var scpName = "cb_scp_tpl_" + Date.now();
+        SCP_TPLS.forEach(function (t) {
+            var r = document.createElement("label"); r.style.cssText = "display:flex;align-items:center;gap:8px;margin:5px 0;cursor:pointer;text-transform:none;font-weight:normal;font-size:14px;";
+            var rb = document.createElement("input"); rb.type = "radio"; rb.name = scpName; rb.value = t[0]; rb.checked = t[0] === "none";
+            rb.addEventListener("change", function () { if (rb.checked) { scpState.tpl = t[0]; scpPaint(); } });
+            var s = document.createElement("span"); s.textContent = t[1];
+            r.appendChild(rb); r.appendChild(s); scpWrap.appendChild(r);
+        });
+        var scpMore = document.createElement("div"); scpMore.style.cssText = "display:none;margin:8px 0 0 22px;";
+        var scpRow = document.createElement("label"); scpRow.style.cssText = "display:flex;align-items:flex-start;gap:8px;margin:5px 0;cursor:pointer;text-transform:none;font-weight:normal;font-size:14px;";
+        var scpCb = document.createElement("input"); scpCb.type = "checkbox"; scpCb.style.marginTop = "3px";
+        var scpTxt = document.createElement("span"); scpTxt.textContent = "Social-Media-Kanäle konnten im Web- oder Zweittermin nicht verknüpft werden (Hinweis mit Anleitung einfügen)";
+        scpRow.appendChild(scpCb); scpRow.appendChild(scpTxt);
+        scpMore.appendChild(scpRow);
+        var scpLink = document.createElement("input"); scpLink.type = "url"; scpLink.placeholder = "Link zur Anleitung im Helpcenter (Pflicht)";
+        scpLink.value = helpLink || "";
+        scpLink.title = "Je nach Brand vorausgefüllt – bitte prüfen";
+        scpLink.style.cssText = "display:none;width:100%;box-sizing:border-box;margin:6px 0 0;padding:8px 10px;border-radius:4px;border:1px solid #55565b;background:#2c2d31;color:#fff;font-size:13px;text-transform:none;";
+        var scpErr = document.createElement("div"); scpErr.style.cssText = "display:none;margin-top:5px;font-size:12px;color:#f38b8b;";
+        scpMore.appendChild(scpLink); scpMore.appendChild(scpErr);
+        scpWrap.appendChild(scpMore);
+        scpCb.addEventListener("change", function () {
+            scpState.hint = scpCb.checked;
+            scpLink.style.display = scpCb.checked ? "block" : "none";
+            scpErr.style.display = "none"; scpLink.style.borderColor = "#55565b";
+            if (scpCb.checked) { scpLink.focus(); scpLink.select(); }
+        });
+        scpLink.addEventListener("input", function () { scpErr.style.display = "none"; scpLink.style.borderColor = "#55565b"; });
+        // nur bei Projekten vom Typ "Social Content Pilot" nachfragen
+        if (isScp) box.appendChild(scpWrap);
 
         var actions = document.createElement("div"); actions.style.cssText = "display:flex;gap:10px;flex-wrap:wrap;margin-top:4px;";
         function finish(template){
             overlay.remove();
-            resolve({ anrede: anredeState.value || "Guten Tag", template: template, opts: optState });
+            resolve({ anrede: anredeState.value || "Guten Tag", template: template, opts: optState, scp: scpState });
         }
-        var mainLabel = isAktu ? "Aktualisierung erstellen" : "Website ver\u00f6ffentlichen (Live)";
-        var mainTpl = isAktu ? "aktu" : "live";
-        var btnMain = document.createElement("button"); btnMain.type = "button"; btnMain.className = "btn btn--primary"; btnMain.textContent = mainLabel;
-        btnMain.style.cssText = "padding:9px 16px;border-radius:4px;cursor:pointer;text-transform:none;font-size:14px;";
-        btnMain.addEventListener("click", function(){ finish(mainTpl); });
-        actions.appendChild(btnMain);
-        if (!isAktu && hasDemo) {
-            var btnDemo = document.createElement("button"); btnDemo.type = "button"; btnDemo.className = "btn"; btnDemo.textContent = "Auf Demo schlie\u00dfen";
-            btnDemo.style.cssText = "padding:9px 16px;border-radius:4px;cursor:pointer;text-transform:none;font-size:14px;";
-            btnDemo.addEventListener("click", function(){ finish("demo"); });
-            actions.appendChild(btnDemo);
+        // Link pruefen: ohne Protokoll -> https:// davor, sonst muss es http(s) sein
+        function scpLinkOk() {
+            var v = String(scpLink.value || "").trim();
+            if (v && !/^https?:\/\//i.test(v)) v = "https://" + v;
+            var ok = /^https?:\/\/[^\s\/.]+\.[^\s]+$/i.test(v);
+            if (!ok) {
+                scpErr.textContent = v ? "Bitte einen g\u00fcltigen Link angeben (z. B. https://hilfe.example.de/...)." : "Bitte den Link zur Anleitung im Helpcenter angeben.";
+                scpErr.style.display = "block"; scpLink.style.borderColor = "#e06c6c"; scpLink.focus();
+                return false;
+            }
+            scpState.link = v;
+            return true;
         }
+        // Hauptknopf: eine Aktualisierung bleibt eine Aktualisierung, bei Shop-Projekten
+        // ist es die SMTP-Empfehlung, sonst die Live-Vorlage
+        var mainTpl = isAktu ? "aktu" : (isShop ? "shop" : "live");
+        var LABELS = { aktu: "Aktualisierung erstellen", shop: "SMTP-Einrichtung empfehlen",
+            live: "Website veröffentlichen (Live)", demo: "Auf Demo schließen" };
+        var extras = [];
+        if (isShop && mainTpl !== "shop") extras.push("shop");
+        if (!isAktu && mainTpl !== "live") extras.push("live");
+        if (!isAktu && hasDemo) extras.push("demo");
+        function actBtn(label, primary, tpl) {
+            var bt = document.createElement("button"); bt.type = "button"; bt.className = primary ? "btn btn--primary" : "btn"; bt.textContent = label;
+            bt.style.cssText = "padding:9px 16px;border-radius:4px;cursor:pointer;text-transform:none;font-size:14px;";
+            bt.addEventListener("click", function () {
+                if (scpState.tpl !== "none" && scpState.hint && !scpLinkOk()) return;
+                finish(tpl);
+            });
+            actions.appendChild(bt);
+        }
+        // Knoepfe passend zur SCP-Auswahl
+        function scpPaint() {
+            scpMore.style.display = scpState.tpl === "none" ? "none" : "block";
+            actions.innerHTML = "";
+            if (scpState.tpl === "mail") { actBtn("SCP-Mail erstellen", true, "scp"); return; }
+            if (scpState.tpl === "live") { actBtn("Website veröffentlichen (Live) mit SCP", true, "live"); return; }
+            if (scpState.tpl === "demo") { actBtn("Auf Demo schließen mit SCP", true, "demo"); return; }
+            // ohne SCP: Hauptknopf (Aktualisierung / bei Shop-Projekten SMTP-Empfehlung / Live),
+            // alles andere bleibt als zweiter Knopf erreichbar
+            actBtn(LABELS[mainTpl], true, mainTpl);
+            extras.forEach(function (tpl) { actBtn(LABELS[tpl], false, tpl); });
+        }
+        scpPaint();
         box.appendChild(actions);
         overlay.appendChild(box);
         document.body.appendChild(overlay);
-        overlay.addEventListener("click", function (e) { if (e.target === overlay) { overlay.remove(); resolve({ anrede: "Guten Tag", template: (isAktu?"aktu":"live"), opts: optState }); } });
+        overlay.addEventListener("click", function (e) { if (e.target === overlay) { overlay.remove(); resolve({ anrede: "Guten Tag", template: mainTpl, opts: optState, scp: { tpl: "none" } }); } });
     });
     }
 
@@ -295,6 +374,26 @@
         'WESTFALEN-BLATT':      { email: 'info@westfalen-blatt-onlineservice.de',    domain: 'https://www.westfalen-blatt-onlineservice.de/' },
         'WN OnlineService':     { email: 'info@wn-onlineservice.de',                 domain: 'https://www.wn-onlineservice.de/' }
     };
+    // Anleitung zum Social Content Pilot im Helpcenter, je nach Brand (Working Guide 8.5 / 3.2 / 3.5)
+    var SCP_HELP = {
+        'Euroweb':              'https://helpcenter.euroweb.de/documentation/topic/social-content-pilot',
+        'Internet Media':       'https://helpcenter.internet-media.com/documentation/topic/social-content-pilot',
+        'Stuttgarter Zeitung':  'https://helpcenter.stz-onlineservice.de/documentation/topic/social-content-pilot',
+        'United Media':         'https://helpcenter.united-media.de/documentation/topic/social-content-pilot',
+        'United Media Schweiz': 'https://helpcenter.united-media.de/documentation/topic/social-content-pilot',
+        'WESTFALEN-BLATT':      'https://helpcenter.westfalen-blatt-onlineservice.de/documentation/topic/social-content-pilot',
+        'WN OnlineService':     'https://helpcenter.wn-onlineservice.de/documentation/topic/social-content-pilot'
+    };
+    // SCP-Texte (gleich in allen drei Vorlagen)
+    var SCP_TXT = {
+        ready: "Wir freuen uns au\u00dferdem, Ihnen heute mitteilen zu k\u00f6nnen, dass Ihr Social Content Pilot bereit ist, Ihre Botschaften und Ihre CI in die spannende Welt des Social Media zu tragen! Die ersten Posts sind bereits erstellt und der Redaktionsplan steht.",
+        preview: "Sie erhalten den jeweiligen Post f\u00fcnf Tage vor der geplanten Ver\u00f6ffentlichung per E-Mail zur Vorschau. Passt alles f\u00fcr Sie, k\u00f6nnen Sie sich entspannt zur\u00fccklehnen und der Post wird zum geplanten Termin automatisch f\u00fcr Sie ver\u00f6ffentlicht! M\u00f6chten Sie etwas anpassen, k\u00f6nnen Sie Text und Bild selbst \u00e4ndern oder die Ver\u00f6ffentlichung ablehnen.",
+        hint: "Damit Ihre Posts wie geplant ver\u00f6ffentlicht werden k\u00f6nnen, fehlt noch ein wichtiger Schritt: Bitte verkn\u00fcpfen Sie Ihre Social-Media-Kan\u00e4le mit dem Social Content Pilot. Wie das funktioniert, erfahren Sie in unserer Anleitung: "
+    };
+    function scpHintHtml(scp) {
+        if (!scp || !scp.hint || !scp.link) return "";
+        return escapeHtml(SCP_TXT.hint) + '<a href="' + escapeAttr(scp.link) + '">' + escapeHtml(scp.link) + '</a>';
+    }
     function brandContact(data) {
         var b = resolveBrand(data);
         return BRAND_CONTACT[b] || { email: 'info@wwwe.de', domain: 'https://www.wwwe.de/' };
@@ -310,13 +409,15 @@
 
     /* ===== ZT-MAILVORLAGEN (Betreff + Body) ===== */
     // anredeName = z.B. "Sehr geehrter Herr Mustermann" oder "Guten Tag"
-    // opts = { qImages, scp, qr } (optionale Bloecke, nur Live)
+    // opts = { qImages, qr } (optionale Bloecke, nur Live)
     function ztSubjectLive(kdnr)  { return kdnr + " \u2013 Ver\u00f6ffentlichung Ihrer Website"; }
     function ztSubjectDemo(kdnr)  { return kdnr + " \u2013 Ver\u00f6ffentlichung Ihrer Website im Demobereich"; }
     function ztSubjectAktu(kdnr)  { return kdnr + " \u2013 Fertigstellung Ihrer Aktualisierung"; }
+    function ztSubjectScp(kdnr)   { return kdnr + " \u2013 Ihr Social Content Pilot steht f\u00fcr Sie bereit!"; }
 function ztSubjectKorrektur(kdnr) { return kdnr + " – Fertigstellung Ihrer Korrektur"; }
+    function ztSubjectShop(kdnr) { return kdnr + " | Onlineshop | Empfehlung: Einrichtung von SMTP für zuverlässigen E-Mail-Versand"; }
 
-    function ztBodyLive(anredeName, live, brandDomain, opts) {
+    function ztBodyLive(anredeName, live, brandDomain, opts, scp) {
         opts = opts || {};
         function E(s){ return escapeHtml(s); }
         var liveHtml = live ? domainLinkHtml(live) : "www.live-domain.tld";
@@ -339,9 +440,10 @@ function ztSubjectKorrektur(kdnr) { return kdnr + " – Fertigstellung Ihrer Kor
             L.push(E("Sie k\u00f6nnen uns das neue Material ganz einfach und schnell \u00fcber Ihr Service-Portal zukommen lassen."));
             L.push("");
         }
-        if (opts.scp) {
-            L.push(E("Wir freuen uns au\u00dferdem, Ihnen heute mitteilen zu k\u00f6nnen, dass Ihr SocialContentPilot bereit ist, Ihre Botschaften und Ihre CI in die spannende Welt des Social Media zu tragen! Die ersten Posts sind bereits erstellt und der Redaktionsplan steht. \u00dcber Ihr Service-Portal k\u00f6nnen Sie dabei die Posts anpassen (wenn n\u00f6tig) und freigeben."));
+        if (scp && scp.tpl === "live") {
+            L.push(E(SCP_TXT.ready) + "<br>" + E(SCP_TXT.preview));
             L.push("");
+            if (scpHintHtml(scp)) { L.push(scpHintHtml(scp)); L.push(""); }
         }
         if (opts.qr) {
             L.push(E("Gerne erstellen wir f\u00fcr Sie noch den gew\u00fcnschten QR-Code. Bitte teilen Sie uns mit, was der QR-Code beinhalten soll und in welchem Format Sie diesen ben\u00f6tigen."));
@@ -357,7 +459,26 @@ function ztSubjectKorrektur(kdnr) { return kdnr + " – Fertigstellung Ihrer Kor
         return { html: L.join("<br>") };
     }
 
-    function ztBodyDemo(anredeName, demo, groupEmail, groupDomain) {
+    // Social Content Pilot (eigene Mail). scp = { hint, link }: hint = Kanaele noch
+    // nicht verknuepft -> Absatz mit Link zur Anleitung im Helpcenter
+    function ztBodyScp(anredeName, scp) {
+        scp = scp || {};
+        function E(s){ return escapeHtml(s); }
+        var L = [];
+        L.push(E((anredeName || "Guten Tag") + ","));
+        L.push("");
+        L.push(E("Sie wollen professionell f\u00fcr Sie erstellten Social Media Content spielend einfach f\u00fcr Ihr Business nutzen? Das ist ab sofort m\u00f6glich!"));
+        L.push("");
+        L.push(E("Denn wir freuen uns, Ihnen heute mitteilen zu k\u00f6nnen, dass Ihr Social Content Pilot bereit ist, Ihre Botschaften und Ihre CI in die spannende Welt des Social Media zu tragen! Die ersten Posts sind bereits erstellt und der Redaktionsplan steht."));
+        L.push("");
+        L.push(E("Sie erhalten den jeweiligen Post f\u00fcnf Tage vor der geplanten Ver\u00f6ffentlichung per E-Mail zur Vorschau. Passt alles f\u00fcr Sie, k\u00f6nnen Sie sich entspannt zur\u00fccklehnen und der Post wird zum geplanten Termin automatisch f\u00fcr Sie ver\u00f6ffentlicht! M\u00f6chten Sie etwas anpassen, k\u00f6nnen Sie Text und Bild selbst \u00e4ndern oder die Ver\u00f6ffentlichung ablehnen."));
+        L.push("");
+        if (scpHintHtml(scp)) { L.push(scpHintHtml(scp)); L.push(""); }
+        L.push(E("Wir w\u00fcnschen Ihnen eine erfolgreiche Woche!"));
+        return { html: L.join("<br>") };
+    }
+
+    function ztBodyDemo(anredeName, demo, groupEmail, groupDomain, scp) {
         function E(s){ return escapeHtml(s); }
         var demoHtml = demo ? domainLinkHtml(demo) : "www.demo-domain.tld";
         var groupDomHtml = groupDomain ? domainLinkHtml(groupDomain) : "https://www.united-media.de";
@@ -371,8 +492,10 @@ function ztSubjectKorrektur(kdnr) { return kdnr + " – Fertigstellung Ihrer Kor
         L.push("");
         L.push(E("Damit Ihre Website unter Ihrer gew\u00fcnschten Domain online gehen kann, sind noch technische Abstimmungen im Zusammenhang mit Ihrer Domain erforderlich. Bitte setzen Sie sich hierzu noch einmal mit Ihrer zust\u00e4ndigen Medienberatung in Verbindung, damit die Ver\u00f6ffentlichung vorbereitet werden kann. Sie erreichen diese auch per E-Mail an " + (groupEmail || "info@united-media.de") + "."));
         L.push("");
-        L.push(E("Wir freuen uns au\u00dferdem, Ihnen heute mitteilen zu k\u00f6nnen, dass Ihr SocialContentPilot bereit ist, Ihre Botschaften und Ihre CI in die spannende Welt des Social Media zu tragen! Die ersten Posts sind bereits erstellt und der Redaktionsplan steht. \u00dcber Ihr Service-Portal k\u00f6nnen Sie dabei die Posts anpassen (wenn n\u00f6tig) und freigeben."));
-        L.push("");
+        if (scp && scp.tpl === "demo") {
+            L.push(E(SCP_TXT.ready) + "<br>" + E(SCP_TXT.preview) + (scpHintHtml(scp) ? "<br>" + scpHintHtml(scp) : ""));
+            L.push("");
+        }
         L.push(E("Damit uns Ihre \u00c4nderungsw\u00fcnsche auch weiterhin schnell und zuverl\u00e4ssig erreichen, bitten wir Sie, diese direkt \u00fcber Ihr Service-Portal einzureichen. Loggen Sie sich dazu einfach mit Ihren Zugangsdaten unter ") + groupDomHtml + E(" ein."));
         L.push("");
         L.push(E("Wir danken Ihnen f\u00fcr Ihre Zusammenarbeit und stehen Ihnen jederzeit zur Verf\u00fcgung, um Ihre W\u00fcnsche und Fragen zu beantworten. Gemeinsam bringen wir Ihr Projekt erfolgreich zum Abschluss!"));
@@ -400,6 +523,39 @@ function ztSubjectKorrektur(kdnr) { return kdnr + " – Fertigstellung Ihrer Kor
         L.push(E("Damit uns Ihre W\u00fcnsche zuk\u00fcnftig schneller erreichen und wir diese effektiver bearbeiten k\u00f6nnen, nutzen Sie bitte das komfortable Anfrageformular, welches Sie in Ihrem pers\u00f6nlichen Kundenbereich finden k\u00f6nnen. Melden Sie sich hierzu ganz einfach mit Ihren bekannten Zugangsdaten auf unserer Unternehmens-Webseite an und w\u00e4hlen in der oberen Men\u00fcleiste den Punkt \u201eAktualisierung anfordern\u201c. Sie k\u00f6nnen uns jetzt im Detail all Ihre W\u00fcnsche und auch entsprechende Materialien per Datei-Upload zukommen lassen."));
         L.push("");
         L.push(E("Um Ihre W\u00fcnsche auch zuk\u00fcnftig zu Ihrer vollsten Zufriedenheit umsetzen zu k\u00f6nnen, bitten wir Sie darum, diese so genau wie m\u00f6glich zu beschreiben und bereits alle notwendigen Materialien innerhalb einer Anfrage zukommen zu lassen. Vielen Dank f\u00fcr Ihre Mitarbeit!"));
+        return { html: L.join("<br>") };
+    }
+
+    // Shop-Projekte: Empfehlung, den Mailversand des Shops auf SMTP umzustellen.
+    // Das Postfach kommt aus den Kundendaten des Projekts (data.client_email).
+    function ztBodyShop(anredeName, mailbox) {
+        function E(s){ return escapeHtml(s); }
+        var L = [];
+        L.push(E((anredeName || "Guten Tag") + ","));
+        L.push("");
+        L.push(E("für die finale Fertigstellung Ihres Shops empfehlen wir die Einrichtung eines SMTP-Dienstes für den E-Mail-Versand."));
+        L.push("");
+        L.push(E("Warum ist das wichtig?"));
+        L.push(E("Aktuell werden E-Mails (z. B. Bestellbestätigungen) über die Standard-PHP-Mail-Funktion versendet. Diese Methode ist jedoch oft unzuverlässig, da viele Hosting-Provider sie blockieren oder E-Mails als Spam eingestuft werden."));
+        L.push("");
+        L.push(E("Durch die Einrichtung eines SMTP-Dienstes profitieren Sie von:"));
+        L.push("<ul>"
+            + "<li>" + E("Zuverlässiger Zustellung – E-Mails erreichen Ihre Kunden sicher.") + "</li>"
+            + "<li>" + E("Bessere Reputation – Weniger Gefahr, dass E-Mails im Spam landen.") + "</li>"
+            + "<li>" + E("Fehlerminimierung – Fehlerberichte helfen bei der Nachverfolgung.") + "</li>"
+            + "</ul>");
+        L.push(E("Gerne unterstützen wir Sie bei der Einrichtung. Dafür benötigen wir die SMTP-Daten Ihres E-Mail-Providers von einem Ihrer E-Mail-Konten. Da Sie aktuell bereits das folgende Postfach verwenden, empfehle ich Ihnen uns die folgenden Daten für eine erfolgreiche Einrichtung zukommen zu lassen:"));
+        L.push("");
+        L.push(E("Postfach: " + (mailbox || "[E-MAIL-ADRESSE VOM KUNDEN]")));
+        L.push("<ul>"
+            + "<li>" + E("SMTP Hostname/Mailserver") + "</li>"
+            + "<li>" + E("SMTP Benutzername") + "</li>"
+            + "<li>" + E("SMTP Passwort") + "</li>"
+            + "<li>" + E("Art der Verschlüsselung (SMTPS / STARTTLS)") + "</li>"
+            + "</ul>");
+        L.push(E("Die Einrichtung ist nicht zwingend erforderlich, wird von uns jedoch dringend empfohlen, um einen reibungslosen und professionellen E-Mail-Versand sicherzustellen."));
+        L.push("");
+        L.push(E("Für Rückfragen oder weitere Informationen stehen wir Ihnen jederzeit gerne zur Verfügung."));
         return { html: L.join("<br>") };
     }
 
@@ -618,10 +774,11 @@ function ztSubjectKorrektur(kdnr) { return kdnr + " – Fertigstellung Ihrer Kor
             var demo = data.demo_link ? cleanDomain(data.demo_link) : "";
             var hasDemo = !!demo;
             var isAktuTicket = !!data.is_aktu;
-            var res = await askGender(data.client_name || '', hasDemo, isAktuTicket);
+            var res = await askGender(data.client_name || '', hasDemo, isAktuTicket, !!data.is_shop, SCP_HELP[brand] || '', /social\s*content\s*pilot/i.test(data.project_type || ''));
             var anrede = res.anrede;
             var template = res.template;
             var blockOpts = res.opts || {};
+            var scpOpts = res.scp || {};
             await fillKundennummer(kdnr);
             await fillCustomer(data.client_email || '');
             await setGroupById(isAktuTicket ? groups.aktu : groups.web);
@@ -630,22 +787,34 @@ function ztSubjectKorrektur(kdnr) { return kdnr + " – Fertigstellung Ihrer Kor
             var nm = (data.client_name || '').trim();
             var greet = anrede || 'Guten Tag';
             var anredeName = (greet.indexOf('Guten Tag') < 0 && nm) ? (greet + ' ' + nm) : greet;
+            // Social Content Pilot gruesst immer mit "Guten Tag Herr / Frau Name"
+            if (template === "scp") {
+                var hf = /Herr$/.test(greet) ? "Herr" : (/Frau$/.test(greet) ? "Frau" : "");
+                anredeName = (hf && nm) ? ("Guten Tag " + hf + " " + nm) : "Guten Tag";
+            }
             // Gruppen-Kontakt + Marken-Domain
             var contact = brandContact(data);
             var subject, body;
-            if (template === "aktu") {
+            if (template === "shop") {
+                subject = ztSubjectShop(kdnr);
+                body = ztBodyShop(anredeName, data.client_email || '');
+            } else if (template === "scp") {
+                subject = ztSubjectScp(kdnr);
+                body = ztBodyScp(anredeName, scpOpts);
+            } else if (template === "aktu") {
                 subject = data.is_korrektur ? ztSubjectKorrektur(kdnr) : ztSubjectAktu(kdnr);
                 body = ztBodyAktu(anredeName, live);
             } else if (template === "demo") {
                 subject = ztSubjectDemo(kdnr);
-                body = ztBodyDemo(anredeName, demo, contact.email, contact.domain);
+                body = ztBodyDemo(anredeName, demo, contact.email, contact.domain, scpOpts);
             } else {
                 subject = ztSubjectLive(kdnr);
-                body = ztBodyLive(anredeName, live, contact.domain, blockOpts);
+                body = ztBodyLive(anredeName, live, contact.domain, blockOpts, scpOpts);
             }
             await fillTitle(subject);
             await fillBody(body);
-            await setSelectByName('state_id', STATE.closed_successful);
+            // die SMTP-Empfehlung wartet auf die Daten des Kunden -> Ticket offen lassen
+            await setSelectByName('state_id', template === "shop" ? STATE.offen : STATE.closed_successful);
             await setSelectByName('priority_id', 3);
         }
     }

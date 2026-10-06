@@ -1,6 +1,6 @@
 {
   "name": "Zammad Extension",
-  "version": "0.04",
+  "version": "0.06",
   "versionFrom": "Zammad-Extension.user.js",
   "kind": "userscript",
   "icon": "envelope",

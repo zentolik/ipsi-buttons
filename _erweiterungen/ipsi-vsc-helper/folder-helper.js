@@ -1,5 +1,5 @@
 /* ==================================================================
-   ipsi-vsc-helper  v1.3
+   ipsi-vsc-helper  v1.4
    ------------------------------------------------------------------
    Lokaler Helfer für das Copy-Buttons-Userscript (VSC-Ordner-Öffner).
 
@@ -9,6 +9,15 @@
    - GET  /diag?path=...           → Schritt-für-Schritt-Diagnose des Weckdienstes
    - POST /open           (Body=Pfad) → öffnet den Ordner in VS Code (neues Fenster)
    - POST /open-explorer  (Body=Pfad) → öffnet den Ordner im Windows-Explorer
+   - POST /open-explorer-create (Body=Pfad) → wie /open-explorer; fehlt nur der
+                                  letzte Ordner, wird er im vorhandenen
+                                  Elternordner angelegt und dann geöffnet
+
+   Neu in v1.4:
+   - /open-explorer-create für die Pfade im MegaRun (Copy-Buttons): z. B.
+     "...\rohdaten\KL" fehlt, "...\rohdaten" ist da → "KL" wird angelegt.
+     Angelegt wird immer nur EINE Ebene und nur, wenn der Elternordner
+     wirklich existiert – fehlt mehr, gibt es eine Fehlermeldung.
 
    Neu in v1.3:
    - Zuverlässiger Programmstart: VS Code/Explorer werden über das
@@ -59,7 +68,7 @@ const { spawn, execFile } = require('child_process');
 
 const HOST = '127.0.0.1';
 const PORT = 48620;
-const VERSION = '1.3';
+const VERSION = '1.4';
 const ALLOWED_ORIGINS = ['https://ipsi.securewebsystems.net'];
 const CODE_PATH_OVERRIDE = ''; // Optional: kompletter Pfad zur Code.exe eintragen, falls die Auto-Suche fehlschlägt
 const PID_FILE = path.join(__dirname, 'helper.pid');
@@ -383,6 +392,37 @@ async function openInExplorer(p) {
         : { status: 'error', message: `Start fehlgeschlagen: ${result.detail}` };
 }
 
+// ---------- Ordner im Explorer öffnen, letzte Ebene notfalls anlegen ----
+// Nur wenn der Ordner selbst fehlt ("existiert dort nicht") und sein
+// Elternordner erreichbar ist, wird genau dieser eine Ordner angelegt.
+const mkdirAsync = (p) => new Promise((resolve, reject) => fs.mkdir(p, (err) => (err && err.code !== 'EEXIST') ? reject(err) : resolve()));
+async function openInExplorerCreate(p) {
+    const clean = trimTrailingBackslashes(p);
+    const first = await resolveAccessiblePath(clean);
+    let effective = first.effective, created = false;
+    if (!effective) {
+        if (first.reason !== 'Ordner existiert dort nicht') return { status: 'error', message: `Ordner nicht gefunden: ${clean}${first.reason ? ` – ${first.reason}` : ''}` };
+        const parent = path.win32.dirname(clean);
+        const name = path.win32.basename(clean);
+        if (!name || parent === clean || /^[A-Za-z]:\\?$/.test(clean)) return { status: 'error', message: `Ordner nicht gefunden: ${clean}` };
+        const up = await resolveAccessiblePath(parent);
+        if (!up.effective) return { status: 'error', message: `Ordner nicht gefunden: ${clean} – auch ${parent} fehlt${up.reason ? ` (${up.reason})` : ''}` };
+        effective = path.win32.join(up.effective, name);
+        try {
+            await withTimeout(mkdirAsync(effective), 8000);
+        } catch (e) {
+            return { status: 'error', message: `Ordner konnte nicht angelegt werden: ${clean} – ${e.code || e.message}` };
+        }
+        console.log(`[open-explorer-create] angelegt: ${effective}`);
+        created = true;
+    }
+    const explorerExe = path.join(process.env.SystemRoot || 'C:\\Windows', 'explorer.exe');
+    const result = await launchApp(explorerExe, [trimTrailingBackslashes(effective)]);
+    return result.ok
+        ? { status: 'ok', created, name: path.win32.basename(clean) }
+        : { status: 'error', created, message: `Start fehlgeschlagen: ${result.detail}` };
+}
+
 // ---------- HTTP-Plumbing -------------------------------------------
 function sendJson(res, code, obj) {
     res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -444,13 +484,13 @@ const server = http.createServer((req, res) => {
             return;
         }
 
-        if (req.method === 'POST' && (url.pathname === '/open' || url.pathname === '/open-explorer')) {
-            const inExplorer = url.pathname === '/open-explorer';
+        if (req.method === 'POST' && (url.pathname === '/open' || url.pathname === '/open-explorer' || url.pathname === '/open-explorer-create')) {
+            const route = url.pathname.slice(1);
             readBody(req).then(body => {
                 const p = sanitizeWinPath(body);
                 if (!p) return sendJson(res, 200, { status: 'error', message: 'Ungültiger oder nicht unterstützter Pfad' });
-                console.log(`[${inExplorer ? 'open-explorer' : 'open'}] ${p}`);
-                (inExplorer ? openInExplorer(p) : openInCode(p))
+                console.log(`[${route}] ${p}`);
+                (route === 'open-explorer' ? openInExplorer(p) : route === 'open-explorer-create' ? openInExplorerCreate(p) : openInCode(p))
                     .then(result => sendJson(res, 200, result))
                     .catch(e => sendJson(res, 200, { status: 'error', message: e.message }));
             });

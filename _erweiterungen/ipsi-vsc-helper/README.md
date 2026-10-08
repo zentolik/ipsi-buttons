@@ -1,4 +1,4 @@
-# ipsi-vsc-helper (v1.3)
+# ipsi-vsc-helper (v1.4)
 
 Lokaler Helfer für das Copy-Buttons-Userscript: Linksklick auf den Pfad-Button
 listet die Ordner im Projekt-Pfad und öffnet sie direkt in Visual Studio Code
@@ -6,6 +6,13 @@ listet die Ordner im Projekt-Pfad und öffnet sie direkt in Visual Studio Code
 "Im Explorer öffnen". Ersetzt die alte "chrome-folder-opener"-Extension
 komplett – keine Chrome-Erweiterung, kein Registry-Eintrag, kein
 Native-Messaging mehr.
+
+## Neu in v1.4
+- **Neue Route `/open-explorer-create`** für die Pfade im MegaRun (Copy-Buttons):
+  Fehlt nur der letzte Ordner (z. B. `...\rohdaten\KL`), der Elternordner
+  (`...\rohdaten`) ist aber da, legt der Helfer genau diesen einen Ordner an
+  und öffnet ihn im Explorer. Fehlt mehr, gibt es eine Fehlermeldung – es wird
+  nie mehr als eine Ebene angelegt.
 
 ## Neu in v1.3
 - **Zuverlässiger Programmstart**: VS Code/Explorer starten über das bewährte
@@ -55,7 +62,7 @@ Native-Messaging mehr.
    - Legt einen unsichtbaren Autostart an (startet bei jeder Windows-Anmeldung)
    - Startet den Helfer sofort
 2. Test: `http://127.0.0.1:48620/ping` im Browser öffnen → es sollte JSON mit
-   `"version":"1.3"` erscheinen.
+   `"version":"1.4"` erscheinen.
 3. Im Copy-Buttons-Settings-Panel den Schalter **"VSC-Ordner-Öffner"** aktivieren.
 
 Hinweis: Beim allerersten Klick kann Chrome einmalig fragen, ob die ipsi-Seite auf
@@ -68,6 +75,7 @@ zum Helfer auf 127.0.0.1.
 - `GET /diag?path=...` → Schritt-für-Schritt-Diagnose des Weckdienstes
 - `POST /open` → startet `Code.exe --new-window <Ordner>` (sichtbar)
 - `POST /open-explorer` → öffnet den Ordner im Windows-Explorer
+- `POST /open-explorer-create` → wie `/open-explorer`; fehlt nur der letzte Ordner, wird er im vorhandenen Elternordner angelegt
 
 ## Fehlersuche
 Klappt das Aufwecken eines Laufwerks nicht, im Browser aufrufen (Pfad anpassen):

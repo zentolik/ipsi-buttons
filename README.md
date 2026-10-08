@@ -1,22 +1,16 @@
 # project ipsi-buttons
-Ein Button, der beim klicken den Pfad zum DFS-Ordner kopiert.
 
 ----
 
 ## Copy-Buttons/OTRS-Extension Installieren:
 
 1. Installiere die Chrome-Erweiterung "**[Tampermonkey](https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo?hl=de)**".
-2. **Script Installation:**
-    - [Copy-Buttons installieren!](https://github.com/zentolik/ipsi-buttons/raw/main/Copy-Buttons.user.js)
-    - [OTRS-Extension installieren!](https://github.com/zentolik/ipsi-buttons/raw/main/_erweiterungen/OTRS-Extension/Copy-Buttons%20(OTRS-Extension).user.js) *(Für die OTRS-Extension ist Copy-Buttons v0.82 oder neuer erforderlich)*
-
-- **[Zur "ipsi-vsc-helper"-Anleitung](https://github.com/zentolik/ipsi-buttons/tree/main/_erweiterungen/ipsi-vsc-helper)**
+2. Script [Copy-Buttons](https://github.com/zentolik/ipsi-buttons/raw/main/Copy-Buttons.user.js) in Tampermonkey einbinden.
 
 ----
 
-## Anleitung zum Updaten (ab Copy-Buttons v0.89 / OTRS-Extension v0.06):
+## Anleitung zum Updaten (ab Copy-Buttons v0.89):
 - [Zum aktualisieren von **Copy-Buttons** hier klicken!](https://github.com/zentolik/ipsi-buttons/raw/main/Copy-Buttons.user.js)
-- [Zum aktualisieren von **OTRS-Extension** hier klicken!](https://github.com/zentolik/ipsi-buttons/raw/main/_erweiterungen/OTRS-Extension/Copy-Buttons%20(OTRS-Extension).user.js)
 
 ## Anleitung zum Updaten (für ältere Versionen):
 1. Lade die "**.user.js**"-Datei *(/Version)* runter herunter, die du installieren möchtest.

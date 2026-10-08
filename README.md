@@ -5,7 +5,7 @@
 ## Copy-Buttons:
 
 1. Installiere die Chrome-Erweiterung "**[Tampermonkey](https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo?hl=de)**".
-2. Script [Copy-Buttons](https://github.com/zentolik/ipsi-buttons/raw/main/Copy-Buttons.user.js) in Tampermonkey einbinden.
+2. Script "**[Copy-Buttons](https://github.com/zentolik/ipsi-buttons/raw/main/Copy-Buttons.user.js)**" in Tampermonkey einbinden.
 
 ----
 

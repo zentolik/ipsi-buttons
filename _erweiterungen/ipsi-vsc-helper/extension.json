@@ -10,24 +10,24 @@
   "download": ["install.cmd", "folder-helper.js", "uninstall.cmd", "README.md"],
   "steps": [
     {
-      "text": "install.cmd und folder-helper.js in denselben Ordner herunterladen.",
+      "text": "**``install.cmd`` und ``folder-helper.js``** in denselben Ordner herunterladen.",
       "files": ["install.cmd", "folder-helper.js"]
     },
     {
-      "text": "install.cmd doppelklicken. Sie beendet eine eventuell laufende ältere Instanz, kopiert den Helfer nach %LOCALAPPDATA%\\ipsi-vsc-helper, legt einen unsichtbaren Autostart an und startet ihn sofort."
+      "text": "**Starte ``install.cmd`` per Doppelklick** und bestätige die Windows-Warnung mit „Ausführen“. Eine ältere Version wird dabei automatisch überschrieben."
     },
     {
-      "text": "Test: die Ping-Route öffnen – es sollte JSON mit der Version erscheinen.",
+      "text": "**Testen:** Ping-Adresse öffnen – hinter ``\"version\":`` sollte die installierte Version stehen.",
       "link": "http://127.0.0.1:48620/ping"
     },
     {
-      "text": "Im Copy-Buttons-Settings-Panel den Schalter \"VSC-Ordner-Öffner\" einschalten."
+      "text": "IPSI-Tab neu laden und ``VSC-Ordner-Öffner`` in den Copy-Buttons-Settings aktivieren."
     },
     {
-      "text": "Beim allerersten Klick fragt Chrome einmalig nach Zugriff auf \"Geräte im lokalen Netzwerk\" – zulassen, das ist die Verbindung zum Helfer."
+      "text": "**Beim allerersten Klick** fragt Chrome einmalig nach Zugriff auf ``Geräte im lokalen Netzwerk`` – zulassen, das ist die Verbindung zum Helfer."
     },
     {
-      "text": "Wieder loswerden: uninstall.cmd laden und doppelklicken.",
+      "text": "**Wieder loswerden:** ``uninstall.cmd`` laden und doppelklicken.",
       "files": ["uninstall.cmd"]
     }
   ]

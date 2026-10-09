@@ -22,19 +22,7 @@
   },
   "steps": [
     {
-      "text": "Unten auf \"Installieren\" klicken – die Datei öffnet sich und Tampermonkey zeigt seine Installations-Seite."
-    },
-    {
-      "text": "Dort die Installation bestätigen. Name und Version liest Tampermonkey selbst aus dem Kopf des Scripts."
-    },
-    {
-      "text": "Falls Tampermonkey nicht anspringt: Datei speichern, in Tampermonkey ein neues Script anlegen und den Inhalt einfügen.",
-      "files": [
-        "Zammad-Extension.user.js"
-      ]
-    },
-    {
-      "text": "Prüfen, dass Copy-Buttons mindestens Version 1.00 ist – sonst fehlen die Projektdaten, die die Extension ausliest."
+      "text": "Unten auf **„Installieren“** klicken – Chrome öffnet kurz eine Zwischenseite von tampermonkey.net und gleich danach die Tampermonkey-Seite. Dort auf **„Installieren“** klicken (ist schon eine ältere Version drauf, heißt der Knopf **„Update“**). Der Tab schließt sich danach von selbst und du bist wieder in IPSI."
     }
   ]
 }

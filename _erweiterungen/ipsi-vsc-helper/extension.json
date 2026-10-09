@@ -1,6 +1,6 @@
 {
   "name": "IPSI VSC Helper",
-  "version": "1.4",
+  "version": "1.5",
   "kind": "local",
   "icon": "console",
   "info": "Lokaler Helfer für den Pfad-Button: Ein Linksklick listet die Ordner im Projekt-Pfad und öffnet den gewählten direkt als neues Fenster in Visual Studio Code. Rechtsklick bietet \"Mit VSC öffnen\" und \"Im Explorer öffnen\". Getrennte Netzlaufwerke weckt er vorher selbst auf. Ersetzt die alte chrome-folder-opener-Extension komplett – keine Chrome-Erweiterung, kein Registry-Eintrag, kein Native-Messaging.",

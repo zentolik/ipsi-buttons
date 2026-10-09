@@ -1,5 +1,5 @@
 /* ==================================================================
-   ipsi-vsc-helper  v1.4
+   ipsi-vsc-helper  v1.5
    ------------------------------------------------------------------
    Lokaler Helfer für das Copy-Buttons-Userscript (VSC-Ordner-Öffner).
 
@@ -12,6 +12,25 @@
    - POST /open-explorer-create (Body=Pfad) → wie /open-explorer; fehlt nur der
                                   letzte Ordner, wird er im vorhandenen
                                   Elternordner angelegt und dann geöffnet
+   - POST /design-flow    (JSON)   → Projektordner in VS Code öffnen, Claude
+                                  Code mit Prompt aufrufen, auf den Export-
+                                  Ordner warten, dann Claude Design öffnen
+   - GET  /design-flow-status?id=… → Stand dieses Ablaufs
+   - POST /design-collect (JSON)   → neues Design-ZIP aus "Downloads" als
+                                  "Claude Design" in den Projektordner entpacken
+   - POST /save-file      (JSON)   → CSV (z. B. Sitemap) im Projektordner ablegen
+
+   Neu in v1.5:
+   - Design-Ablauf für den Copy-Buttons-Knopf "Design starten" (Redesign/
+     Ersterstellung): VS Code + Claude Code (vscode://anthropic.claude-code/
+     open?prompt=…), Export-Ordner "…-export" mit bundle.md abwarten (fertig =
+     20 s keine Änderung, max. 4 Std.), dann claude.ai/design öffnen.
+   - Design-ZIP abholen: neuestes ZIP seit dem Export-Klick im Download-Ordner,
+     entpackt nach "<Projekt>\Claude Design". Ein vorhandener Ordner wird nie
+     überschrieben, sondern zu "Claude Design (alt <Datum>)" umbenannt.
+   - Sitemap-CSV speichern: nur .csv-Dateinamen, nie überschreiben.
+   - URLs/URIs werden über PowerShell Start-Process geöffnet, der Wert steht
+     nur in einer Umgebungsvariablen (nie in einer Kommandozeile).
 
    Neu in v1.4:
    - /open-explorer-create für die Pfade im MegaRun (Copy-Buttons): z. B.
@@ -68,7 +87,7 @@ const { spawn, execFile } = require('child_process');
 
 const HOST = '127.0.0.1';
 const PORT = 48620;
-const VERSION = '1.4';
+const VERSION = '1.5';
 const ALLOWED_ORIGINS = ['https://ipsi.securewebsystems.net'];
 const CODE_PATH_OVERRIDE = ''; // Optional: kompletter Pfad zur Code.exe eintragen, falls die Auto-Suche fehlschlägt
 const PID_FILE = path.join(__dirname, 'helper.pid');
@@ -423,6 +442,228 @@ async function openInExplorerCreate(p) {
         : { status: 'error', created, message: `Start fehlgeschlagen: ${result.detail}` };
 }
 
+// ---------- Design-Ablauf (v1.5) ------------------------------------
+// Copy-Buttons startet den Ablauf auf der IPSI-Projektseite:
+// 1. /design-flow: Projektordner sicherstellen, in VS Code öffnen und
+//    Claude Code mit dem Export-Prompt aufrufen. Danach wartet der Helfer
+//    auf den Export-Ordner ("…-export" mit bundle.md) und öffnet, sobald
+//    er fertig geschrieben ist, Claude Design im Standard-Browser.
+// 2. /design-collect: holt das gerade exportierte Design-ZIP aus dem
+//    Download-Ordner, entpackt es und legt es als "Claude Design" in den
+//    Projektordner.
+// 3. /save-file: legt die Sitemap-CSV der Online Redaktion im
+//    Projektordner ab.
+const DESIGN_URL = 'https://claude.ai/design?via=design_artifacts_banner&noredir=1';
+const EXPORT_WAIT_MS = 4 * 3600000; // so lange wartet der Helfer höchstens auf den Export
+const designFlows = new Map(); // id → { status, folder, effective, started, exportPath, message }
+const validFlowId = (id) => typeof id === 'string' && /^[a-z0-9-]{6,40}$/i.test(id);
+const renameAsync = (a, b) => new Promise((resolve, reject) => fs.rename(a, b, (err) => err ? reject(err) : resolve()));
+const writeFileAsync = (p, data) => new Promise((resolve, reject) => fs.writeFile(p, data, { flag: 'wx' }, (err) => err ? reject(err) : resolve()));
+const existsAsync = (p) => statAsync(p).then(() => true, () => false);
+const stamp = () => { const d = new Date(), z = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())} ${z(d.getHours())}-${z(d.getMinutes())}`; };
+
+// URL oder URI (https://, vscode://) über die Windows-Shell öffnen. Der Wert
+// landet nur in einer Umgebungsvariablen, nie in einer Kommandozeile.
+async function openUri(uri) {
+    const r = await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'Start-Process -FilePath $env:CB_URI'],
+        { env: { ...process.env, CB_URI: uri }, timeout: 20000 });
+    return r.err ? { ok: false, detail: (r.stderr || r.err.message).trim().split(/\r?\n/)[0] } : { ok: true };
+}
+
+// Ordner sicherstellen: fehlt er, wird (wie bei /open-explorer-create) genau
+// die letzte Ebene im vorhandenen Elternordner angelegt
+async function ensureFolder(p) {
+    const clean = trimTrailingBackslashes(p);
+    const first = await resolveAccessiblePath(clean);
+    if (first.effective) return { effective: first.effective, created: false };
+    if (first.reason !== 'Ordner existiert dort nicht') return { error: `Ordner nicht gefunden: ${clean}${first.reason ? ` – ${first.reason}` : ''}` };
+    const parent = path.win32.dirname(clean);
+    const name = path.win32.basename(clean);
+    if (!name || parent === clean || /^[A-Za-z]:\\?$/.test(clean)) return { error: `Ordner nicht gefunden: ${clean}` };
+    const up = await resolveAccessiblePath(parent);
+    if (!up.effective) return { error: `Ordner nicht gefunden: ${clean} – auch ${parent} fehlt${up.reason ? ` (${up.reason})` : ''}` };
+    const effective = path.win32.join(up.effective, name);
+    try { await withTimeout(mkdirAsync(effective), 8000); } catch (e) { return { error: `Ordner konnte nicht angelegt werden: ${clean} – ${e.code || e.message}` }; }
+    console.log(`[design] angelegt: ${effective}`);
+    return { effective, created: true };
+}
+
+// Fingerabdruck eines Ordners (Anzahl, Größe, jüngste Änderung) – zum Erkennen,
+// ob noch geschrieben wird. Begrenzt, damit riesige Exporte nicht hängen.
+async function folderSignature(dir, depth = 0, acc = { files: 0, bytes: 0, newest: 0 }) {
+    if (depth > 5 || acc.files > 5000) return acc;
+    let entries = [];
+    try { entries = await withTimeout(readdirAsync(dir, { withFileTypes: true }), 8000); } catch (e) { return acc; }
+    for (const entry of entries) {
+        const full = path.win32.join(dir, entry.name);
+        if (entry.isDirectory()) { await folderSignature(full, depth + 1, acc); continue; }
+        try {
+            const st = await withTimeout(statAsync(full), 5000);
+            acc.files++; acc.bytes += st.size; acc.newest = Math.max(acc.newest, st.mtimeMs);
+        } catch (e) { /* Datei gerade in Arbeit */ }
+    }
+    return acc;
+}
+
+// jüngster Export-Ordner ("…-export" mit bundle.md), der seit dem Start entstanden ist
+async function findExport(folder, since) {
+    let entries = [];
+    try { entries = await withTimeout(readdirAsync(folder, { withFileTypes: true }), 8000); } catch (e) { return null; }
+    let best = null;
+    for (const entry of entries) {
+        if (!entry.isDirectory() || !/-export$/i.test(entry.name)) continue;
+        try {
+            const st = await withTimeout(statAsync(path.win32.join(folder, entry.name, 'bundle.md')), 5000);
+            if (st.mtimeMs < since - 60000) continue; // Export von früher
+            if (!best || st.mtimeMs > best.mtime) best = { name: entry.name, mtime: st.mtimeMs };
+        } catch (e) { /* noch kein bundle.md */ }
+    }
+    return best;
+}
+
+async function watchExport(id) {
+    const flow = designFlows.get(id);
+    let last = '', stable = 0;
+    while (Date.now() - flow.started < EXPORT_WAIT_MS) {
+        await delay(10000);
+        if (designFlows.get(id) !== flow) return; // neu gestartet
+        const hit = await findExport(flow.effective, flow.started);
+        if (!hit) { last = ''; stable = 0; continue; }
+        const sig = await folderSignature(path.win32.join(flow.effective, hit.name));
+        const key = `${hit.name}|${sig.files}|${sig.bytes}|${sig.newest}`;
+        stable = key === last ? stable + 1 : 0;
+        last = key;
+        flow.status = 'exporting';
+        if (stable < 2) continue; // 20 s nichts mehr geschrieben → fertig
+        flow.exportPath = `${trimTrailingBackslashes(flow.folder)}\\${hit.name}`;
+        const opened = await openUri(`${DESIGN_URL}#cbjob=${encodeURIComponent(id)}&cbexport=${encodeURIComponent(flow.exportPath)}`);
+        flow.status = opened.ok ? 'design' : 'error';
+        flow.message = opened.ok ? 'Claude Design geöffnet' : `Claude Design konnte nicht geöffnet werden: ${opened.detail}`;
+        console.log(`[design] ${id}: ${flow.message} (${flow.exportPath})`);
+        return;
+    }
+    flow.status = 'timeout';
+    flow.message = 'Kein fertiger Export-Ordner gefunden (Zeitlimit)';
+}
+
+async function startDesignFlow(body) {
+    const id = body && body.id;
+    const folder = sanitizeWinPath(body && body.folder);
+    const prompt = String((body && body.prompt) || '');
+    if (!validFlowId(id)) return { status: 'error', message: 'Ungültige Ablauf-ID' };
+    if (!folder) return { status: 'error', message: 'Ungültiger oder nicht unterstützter Pfad' };
+    if (!prompt || prompt.length > 1000 || /[\x00-\x1F]/.test(prompt)) return { status: 'error', message: 'Ungültiger Prompt' };
+    const target = await ensureFolder(folder);
+    if (target.error) return { status: 'error', message: target.error };
+    const exe = await resolveCodeExeAsync();
+    if (!exe) return { status: 'error', message: 'Code.exe nicht gefunden – CODE_PATH_OVERRIDE im Helfer-Script eintragen' };
+    const launched = await launchApp(exe, ['--new-window', trimTrailingBackslashes(target.effective)]);
+    if (!launched.ok) return { status: 'error', message: `VS Code: Start fehlgeschlagen: ${launched.detail}` };
+    const flow = { status: 'vscode', folder, effective: target.effective, started: Date.now(), exportPath: '', message: '' };
+    designFlows.set(id, flow);
+    // Claude Code öffnet sich im gerade fokussierten VS-Code-Fenster → dem neuen Fenster Zeit geben
+    setTimeout(async () => {
+        const opened = await openUri(`vscode://anthropic.claude-code/open?prompt=${encodeURIComponent(prompt)}`);
+        if (!opened.ok) { flow.status = 'error'; flow.message = `Claude Code konnte nicht geöffnet werden: ${opened.detail}`; return; }
+        flow.status = 'waiting';
+        watchExport(id).catch((e) => { flow.status = 'error'; flow.message = e.message; });
+    }, 7000);
+    return { status: 'ok', created: target.created };
+}
+
+// Download-Ordner des Nutzers (auch wenn er verschoben wurde)
+let downloadsCache = '';
+async function downloadsDir() {
+    if (downloadsCache) return downloadsCache;
+    const r = await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+        "(New-Object -ComObject Shell.Application).NameSpace('shell:Downloads').Self.Path"], { timeout: 15000 });
+    const found = r.stdout.trim().split(/\r?\n/).pop() || '';
+    downloadsCache = (found && await existsAsync(found)) ? found : path.join(process.env.USERPROFILE || '', 'Downloads');
+    return downloadsCache;
+}
+
+// neuestes ZIP seit "since", dessen Download abgeschlossen ist (Größe stabil, keine .crdownload mehr)
+async function waitForZip(dir, since, maxMs) {
+    const t0 = Date.now();
+    let last = null;
+    while (Date.now() - t0 < maxMs) {
+        let entries = [];
+        try { entries = await readdirAsync(dir, { withFileTypes: true }); } catch (e) { /* weiter warten */ }
+        let best = null;
+        for (const entry of entries) {
+            if (!entry.isFile() || !/\.zip$/i.test(entry.name)) continue;
+            const full = path.join(dir, entry.name);
+            const st = await statAsync(full).catch(() => null);
+            if (!st || st.mtimeMs < since) continue;
+            if (!best || st.mtimeMs > best.mtime) best = { file: full, name: entry.name, size: st.size, mtime: st.mtimeMs };
+        }
+        const pending = entries.some((entry) => /\.(crdownload|part|tmp)$/i.test(entry.name));
+        if (best && !pending && last && last.file === best.file && last.size === best.size) return best;
+        last = best;
+        await delay(1500);
+    }
+    return null;
+}
+
+async function collectDesign(body) {
+    const folder = sanitizeWinPath(body && body.folder);
+    const since = Number(body && body.since);
+    if (!folder) return { status: 'error', message: 'Ungültiger oder nicht unterstützter Pfad' };
+    if (!Number.isFinite(since) || since < Date.now() - 3600000) return { status: 'error', message: 'Ungültiger Zeitpunkt' };
+    const target = await resolveAccessiblePath(trimTrailingBackslashes(folder));
+    if (!target.effective) return { status: 'error', message: `Projektordner nicht gefunden: ${folder}${target.reason ? ` – ${target.reason}` : ''}` };
+    const dir = await downloadsDir();
+    const zip = await waitForZip(dir, since, 180000);
+    if (!zip) return { status: 'error', message: `Kein neues ZIP in ${dir} gefunden` };
+
+    const name = 'Claude Design';
+    const dest = path.win32.join(target.effective, name);
+    let renamedOld = '';
+    if (await existsAsync(dest)) { // vorhandenen Stand nie überschreiben
+        renamedOld = `${name} (alt ${stamp()})`;
+        await renameAsync(dest, path.win32.join(target.effective, renamedOld));
+    }
+    const tmp = path.win32.join(target.effective, `.cb-entpacken-${Date.now()}`);
+    const r = await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+        'Expand-Archive -LiteralPath $env:CB_ZIP -DestinationPath $env:CB_DEST -Force'],
+        { env: { ...process.env, CB_ZIP: zip.file, CB_DEST: tmp }, timeout: 300000 });
+    const undo = async () => { // bei Fehlern: eigenen Temp-Ordner weg, alten Stand zurück
+        await new Promise((resolve) => fs.rm(tmp, { recursive: true, force: true }, () => resolve()));
+        if (renamedOld) await renameAsync(path.win32.join(target.effective, renamedOld), dest).catch(() => {});
+    };
+    if (r.err) { await undo(); return { status: 'error', message: `Entpacken fehlgeschlagen: ${(r.stderr || r.err.message).trim().split(/\r?\n/)[0]}` }; }
+    let src = tmp;
+    const inner = await readdirAsync(tmp, { withFileTypes: true }).catch(() => []);
+    if (inner.length === 1 && inner[0].isDirectory()) src = path.win32.join(tmp, inner[0].name); // eine Wurzelebene im ZIP auflösen
+    try { await renameAsync(src, dest); } catch (e) { await undo(); return { status: 'error', message: `Verschieben fehlgeschlagen: ${e.code || e.message}` }; }
+    if (src !== tmp) fs.rmdir(tmp, () => {});
+    console.log(`[design-collect] ${zip.file} → ${dest}`);
+    return { status: 'ok', zip: zip.name, target: `${trimTrailingBackslashes(folder)}\\${name}`, renamedOld };
+}
+
+async function saveFile(body) {
+    const folder = sanitizeWinPath(body && body.folder);
+    const name = String((body && body.name) || '');
+    const data = String((body && body.base64) || '');
+    if (!folder) return { status: 'error', message: 'Ungültiger oder nicht unterstützter Pfad' };
+    if (!/^[\w .()-]{1,120}\.csv$/i.test(name) || name.includes('..')) return { status: 'error', message: 'Ungültiger Dateiname' };
+    if (!data || !/^[A-Za-z0-9+/=]+$/.test(data)) return { status: 'error', message: 'Keine Daten' };
+    const target = await resolveAccessiblePath(trimTrailingBackslashes(folder));
+    if (!target.effective) return { status: 'error', message: `Projektordner nicht gefunden: ${folder}${target.reason ? ` – ${target.reason}` : ''}` };
+    const base = name.replace(/\.csv$/i, '');
+    for (let i = 1; i < 50; i++) { // nie überschreiben: notfalls " (2)", " (3)" …
+        const fileName = i === 1 ? name : `${base} (${i}).csv`;
+        try {
+            await writeFileAsync(path.win32.join(target.effective, fileName), Buffer.from(data, 'base64'));
+            console.log(`[save-file] ${fileName} → ${folder}`);
+            return { status: 'ok', name: fileName, target: `${trimTrailingBackslashes(folder)}\\${fileName}` };
+        } catch (e) {
+            if (e.code !== 'EEXIST') return { status: 'error', message: `Speichern fehlgeschlagen: ${e.code || e.message}` };
+        }
+    }
+    return { status: 'error', message: 'Speichern fehlgeschlagen: zu viele gleichnamige Dateien' };
+}
+
 // ---------- HTTP-Plumbing -------------------------------------------
 function sendJson(res, code, obj) {
     res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -440,10 +681,10 @@ function applyCors(req, res) {
     return !origin || ALLOWED_ORIGINS.includes(origin); // erlaubt: ipsi-Seite oder lokale Tools ohne Origin (curl, Browser-Adresszeile)
 }
 
-function readBody(req) {
+function readBody(req, limit = 4096) {
     return new Promise((resolve) => {
         let body = '';
-        req.on('data', (chunk) => { body += chunk; if (body.length > 4096) req.destroy(); });
+        req.on('data', (chunk) => { body += chunk; if (body.length > limit) req.destroy(); });
         req.on('end', () => resolve(body));
         req.on('error', () => resolve(''));
     });
@@ -493,6 +734,25 @@ const server = http.createServer((req, res) => {
                 (route === 'open-explorer' ? openInExplorer(p) : route === 'open-explorer-create' ? openInExplorerCreate(p) : openInCode(p))
                     .then(result => sendJson(res, 200, result))
                     .catch(e => sendJson(res, 200, { status: 'error', message: e.message }));
+            });
+            return;
+        }
+
+        if (req.method === 'GET' && url.pathname === '/design-flow-status') {
+            const flow = designFlows.get(url.searchParams.get('id') || '');
+            if (!flow) return sendJson(res, 200, { status: 'unknown' });
+            return sendJson(res, 200, { status: flow.status, exportPath: flow.exportPath, message: flow.message });
+        }
+
+        if (req.method === 'POST' && (url.pathname === '/design-flow' || url.pathname === '/design-collect' || url.pathname === '/save-file')) {
+            const route = url.pathname.slice(1);
+            readBody(req, route === 'save-file' ? 40 * 1024 * 1024 : 8192).then((raw) => {
+                let body = null;
+                try { body = JSON.parse(raw); } catch (e) { return sendJson(res, 200, { status: 'error', message: 'Ungültige Anfrage' }); }
+                console.log(`[${route}] ${body && body.folder}`);
+                (route === 'design-flow' ? startDesignFlow(body) : route === 'design-collect' ? collectDesign(body) : saveFile(body))
+                    .then((result) => sendJson(res, 200, result))
+                    .catch((e) => sendJson(res, 200, { status: 'error', message: e.message }));
             });
             return;
         }

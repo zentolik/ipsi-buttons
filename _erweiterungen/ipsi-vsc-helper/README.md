@@ -1,4 +1,4 @@
-# ipsi-vsc-helper (v1.4)
+# ipsi-vsc-helper (v1.5)
 
 Lokaler Helfer für das Copy-Buttons-Userscript: Linksklick auf den Pfad-Button
 listet die Ordner im Projekt-Pfad und öffnet sie direkt in Visual Studio Code
@@ -6,6 +6,26 @@ listet die Ordner im Projekt-Pfad und öffnet sie direkt in Visual Studio Code
 "Im Explorer öffnen". Ersetzt die alte "chrome-folder-opener"-Extension
 komplett – keine Chrome-Erweiterung, kein Registry-Eintrag, kein
 Native-Messaging mehr.
+
+## Neu in v1.5
+- **Design-Ablauf** für den Copy-Buttons-Knopf „Design starten“ (Redesign/Ersterstellung
+  mit Test-Domain):
+  1. Projektordner (`…\work\<domain>`) in VS Code öffnen – fehlt nur der letzte Ordner,
+     wird er angelegt – und Claude Code mit dem Prompt
+     „Erstelle mit dem site-export Skill einen Export von https://www.<domain>/“
+     aufrufen (`vscode://anthropic.claude-code/open?prompt=…`, vorausgefüllt, abschicken
+     mit Enter).
+  2. Auf den Export-Ordner `…-export` mit `bundle.md` warten. Fertig ist er, wenn sich
+     20 Sekunden lang nichts mehr ändert (höchstens 4 Stunden).
+  3. Claude Design im Standard-Browser öffnen – Copy-Buttons füllt dort alles vor.
+- **Design-ZIP abholen** (`/design-collect`): Nach „Export“ in Claude Design nimmt der
+  Helfer das neue ZIP aus dem Download-Ordner, entpackt es und legt es als
+  `Claude Design` in den Projektordner. Ein vorhandener Ordner wird nie überschrieben,
+  sondern zu `Claude Design (alt <Datum>)` umbenannt. Das ZIP bleibt in „Downloads“.
+- **Sitemap speichern** (`/save-file`): Die Sitemap-CSV der Online Redaktion landet im
+  Projektordner (nur `.csv`, nie überschreiben).
+- URLs/URIs öffnet der Helfer über PowerShell `Start-Process`; der Wert steht nur in
+  einer Umgebungsvariablen, nie in einer Kommandozeile.
 
 ## Neu in v1.4
 - **Neue Route `/open-explorer-create`** für die Pfade im MegaRun (Copy-Buttons):
@@ -62,7 +82,7 @@ Native-Messaging mehr.
    - Legt einen unsichtbaren Autostart an (startet bei jeder Windows-Anmeldung)
    - Startet den Helfer sofort
 2. Test: `http://127.0.0.1:48620/ping` im Browser öffnen → es sollte JSON mit
-   `"version":"1.4"` erscheinen.
+   `"version":"1.5"` erscheinen.
 3. Im Copy-Buttons-Settings-Panel den Schalter **"VSC-Ordner-Öffner"** aktivieren.
 
 Hinweis: Beim allerersten Klick kann Chrome einmalig fragen, ob die ipsi-Seite auf
@@ -76,6 +96,10 @@ zum Helfer auf 127.0.0.1.
 - `POST /open` → startet `Code.exe --new-window <Ordner>` (sichtbar)
 - `POST /open-explorer` → öffnet den Ordner im Windows-Explorer
 - `POST /open-explorer-create` → wie `/open-explorer`; fehlt nur der letzte Ordner, wird er im vorhandenen Elternordner angelegt
+- `POST /design-flow` (JSON `id`, `folder`, `prompt`) → VS Code + Claude Code öffnen, Export abwarten, Claude Design öffnen
+- `GET /design-flow-status?id=…` → Stand des Ablaufs (`vscode`, `waiting`, `exporting`, `design`, `timeout`, `error`)
+- `POST /design-collect` (JSON `folder`, `since`) → neues Design-ZIP aus „Downloads“ als `Claude Design` entpacken
+- `POST /save-file` (JSON `folder`, `name`, `base64`) → CSV im Projektordner ablegen
 
 ## Fehlersuche
 Klappt das Aufwecken eines Laufwerks nicht, im Browser aufrufen (Pfad anpassen):
